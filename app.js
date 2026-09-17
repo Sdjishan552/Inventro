@@ -2022,12 +2022,16 @@ function renderHome(membership) {
   const canManage = canManageItems();
   const canRequest = canCreateRequest();
   const quickItems = [
-    ['📦','Stock','View live current kitchen stock','stock'],
+    // Stock Requisitioners already see live item availability inline when
+    // they create a request, so their own "Stock" tile is redundant.
+    ...(isStockRequesterRole(role) ? [] : [['📦','Stock','View live current kitchen stock','stock']]),
     ...(role === 'inventory_manager' ? [['⬆️','Dispatch','Send stock out directly','dispatch'],['⬇️','Receive Stock','Record newly arrived items','receive']] : []),
     ...(canRequest ? [['📝','Requests','Create and manage kitchen stock requests','requests']] : []),
     ...(isAdmin ? [['👥','Admin','Manage your company team','admin']] : []),
     ['📊','Stats','See stock and usage insights','stats'],
-    ['🕘','History','Review previous stock activity','history'],
+    // Transaction Manager's "History" and "Live Daily Report" open the exact
+    // same screen, so only the more clearly named one is kept for them.
+    ...(role === 'transaction_manager' ? [] : [['🕘','History','Review previous stock activity','history']]),
     ...(role === 'transaction_manager' ? [['⚡','Live Daily Report','Track Inventory Manager receive & dispatch activity','tm-live-report']] : [])
   ];
 
@@ -2701,17 +2705,30 @@ async function renderStats(){
   const fulfilledReq=visibleRequests.filter(r=>r.status==='fulfilled');
   const rejectedReq=visibleRequests.filter(r=>r.status==='rejected');
   const lowItems=items.filter(i=>Number(i.quantity||0)<=Number(i.lowStockAlert||0));
-  const aggregate=(source)=>items.map(i=>({name:i.name,unit:i.unit,qty:source.filter(r=>r.itemId===i.id).reduce((a,r)=>a+Number(r.quantity||0),0)})).filter(x=>x.qty>0).sort((a,b)=>b.qty-a.qty).slice(0,10);
-  const topDispatched=aggregate(dispatched),topReceived=aggregate(received);
-  const dayMap=new Map();
-  dispatched.forEach(r=>{const d=r.createdAt?.toDate?.()||new Date(r.createdAt||0),key=localDateKey(d);dayMap.set(key,(dayMap.get(key)||0)+Number(r.quantity||0));});
-  const days=[...dayMap.keys()].sort().slice(-14);
-  const dailyDispatch=days.map(d=>dayMap.get(d)||0);
+  // Top 8 items by combined dispatch+receive activity, dispatched & received
+  // shown side by side on one chart instead of two separate top-10 charts.
+  const combinedTop8=items.map(i=>{
+    const disp=dispatched.filter(r=>r.itemId===i.id).reduce((a,r)=>a+Number(r.quantity||0),0);
+    const recv=received.filter(r=>r.itemId===i.id).reduce((a,r)=>a+Number(r.quantity||0),0);
+    return {name:i.name,unit:i.unit,dispatched:disp,received:recv,total:disp+recv};
+  }).filter(x=>x.total>0).sort((a,b)=>b.total-a.total).slice(0,8);
   const statusPie=[
     {label:'Good stock',value:items.filter(i=>Number(i.quantity||0)>Number(i.lowStockAlert||0)).length},
     {label:'Low stock',value:lowItems.length}
   ].filter(x=>x.value>0);
-  const requestPie=[{label:'Pending',value:pendingReq.length},{label:'Approved',value:approvedReq.length},{label:'Fulfilled',value:fulfilledReq.length},{label:'Rejected',value:rejectedReq.length}].filter(x=>x.value>0);
+  // This week vs last week (rolling 7-day windows) — reuses the same rows
+  // already fetched above, no extra Firestore reads.
+  const dayMs=86400000;
+  const startOfToday=(()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth(),n.getDate());})();
+  const thisWeekStart=new Date(startOfToday.getTime()-6*dayMs);
+  const thisWeekEndExclusive=new Date(startOfToday.getTime()+dayMs);
+  const lastWeekStart=new Date(startOfToday.getTime()-13*dayMs);
+  const sumInRange=(source,start,endExclusive)=>source.reduce((a,r)=>{const d=r.createdAt?.toDate?.()||new Date(r.createdAt||0);return (d>=start&&d<endExclusive)?a+Number(r.quantity||0):a;},0);
+  const weekCompare={
+    labels:['Last week','This week'],
+    received:[sumInRange(received,lastWeekStart,thisWeekStart),sumInRange(received,thisWeekStart,thisWeekEndExclusive)],
+    dispatched:[sumInRange(dispatched,lastWeekStart,thisWeekStart),sumInRange(dispatched,thisWeekStart,thisWeekEndExclusive)]
+  };
   const receivedSummary=quantitySummary(received);
   const dispatchedSummary=quantitySummary(dispatched);
   const roleTitle=role==='admin'?'Company-wide':roleLabel(role);
@@ -2731,21 +2748,17 @@ async function renderStats(){
   </div>
   <section class="admin-card"><div class="admin-card-title"><div><h2>Key performance charts</h2><p>Charts are filtered to the signed-in role where applicable.</p></div></div>
     <div class="chart-grid stats-chart-grid">
-      <div class="chart-card"><h3>📤 Top 10 most dispatched</h3><canvas id="stats-dispatched"></canvas></div>
-      <div class="chart-card"><h3>📥 Top 10 most received</h3><canvas id="stats-received"></canvas></div>
-      <div class="chart-card"><h3>📈 Daily dispatch trend</h3><canvas id="stats-daily-dispatch"></canvas></div>
+      <div class="chart-card"><h3>📊 Top 8 items · dispatched vs received</h3><canvas id="stats-top8"></canvas></div>
       <div class="chart-card"><h3>🥧 Current stock health</h3><canvas id="stats-stock-health"></canvas></div>
-      <div class="chart-card"><h3>🥧 Request status</h3><canvas id="stats-request-status"></canvas></div>
+      <div class="chart-card"><h3>📈 This week vs last week</h3><canvas id="stats-week-compare"></canvas></div>
     </div>
   </section></div>`;
   if(!window.Chart){await new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';sc.onload=resolve;sc.onerror=reject;document.head.appendChild(sc);}).catch(()=>{});}
   if(window.Chart){
-    const makeBar=(id,data,label)=>{ const canvas=root.querySelector(id); if(!canvas)return null; return new Chart(canvas,{type:'bar',data:{labels:data.map(x=>x.name),datasets:[{label,data:data.map(x=>x.qty)}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true}}}}); };
-    makeBar('#stats-dispatched',topDispatched,'Dispatched quantity');
-    makeBar('#stats-received',topReceived,'Received quantity');
-    new Chart(root.querySelector('#stats-daily-dispatch'),{type:'line',data:{labels:days.map(d=>{const[y,m,day]=d.split('-');return `${day}-${m}-${y}`}),datasets:[{label:'Dispatched quantity',data:dailyDispatch,tension:.25,fill:true}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
+    const top8Canvas=root.querySelector('#stats-top8');
+    if(top8Canvas) new Chart(top8Canvas,{type:'bar',data:{labels:combinedTop8.map(x=>x.name),datasets:[{label:'Dispatched',data:combinedTop8.map(x=>x.dispatched)},{label:'Received',data:combinedTop8.map(x=>x.received)}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{x:{beginAtZero:true}}}});
     new Chart(root.querySelector('#stats-stock-health'),{type:'doughnut',data:{labels:statusPie.map(x=>x.label),datasets:[{data:statusPie.map(x=>x.value)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
-    new Chart(root.querySelector('#stats-request-status'),{type:'doughnut',data:{labels:requestPie.map(x=>x.label),datasets:[{data:requestPie.map(x=>x.value)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
+    new Chart(root.querySelector('#stats-week-compare'),{type:'bar',data:{labels:weekCompare.labels,datasets:[{label:'Received',data:weekCompare.received},{label:'Dispatched',data:weekCompare.dispatched}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
   }
   root.querySelector('#stats-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#stats-refresh').addEventListener('click',()=>renderStats());
 }
