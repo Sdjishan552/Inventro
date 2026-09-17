@@ -1,0 +1,74 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    // True if the signed-in user is an active admin of the given company.
+    function isAdminOf(companyId) {
+      let me = get(/databases/$(database)/documents/companies/$(companyId)/employees/$(myEmail()));
+      return me.data.role == 'admin' && me.data.status == 'active';
+    }
+
+    // codes/{code} -> { companyId, reservedBy }
+    // Public lookup table so the join screen can resolve a 6-digit code to
+    // a company before the user has any relationship to that company yet.
+    match /codes/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.reservedBy == request.auth.uid
+        && get(/databases/$(database)/documents/companies/$(request.resource.data.companyId)).data.ownerUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /companies/{companyId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      // Only the owner can rename their company etc. Nothing does this yet,
+      // but it's harmless to allow ahead of the admin-panel build.
+      allow update: if signedIn() && resource.data.ownerUid == request.auth.uid;
+      allow delete: if false;
+
+      match /employees/{emailKey} {
+        allow read: if signedIn();
+
+        // Two legitimate ways a doc gets created here:
+        // 1. The company owner bootstrapping their own admin record.
+        // 2. An admin pre-inviting a new employee (role != admin, status invited).
+        allow create: if signedIn() && (
+          (emailKey == myEmail() && request.resource.data.role == 'admin'
+            && get(/databases/$(database)/documents/companies/$(companyId)).data.ownerUid == request.auth.uid)
+          || (isAdminOf(companyId) && request.resource.data.status == 'invited')
+        );
+
+        // Two legitimate ways a doc gets updated here:
+        // 1. The invited person activating their own record on join —
+        //    restricted to exactly the fields the join flow touches, so an
+        //    employee can never grant themselves a different role or tabs.
+        // 2. An admin editing role/tabs/workingDays for someone on their team.
+        allow update: if signedIn() && (
+          (emailKey == myEmail()
+            && resource.data.status == 'invited'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'uid', 'joinedAt', 'displayName'])
+            && request.resource.data.status == 'active')
+          || isAdminOf(companyId)
+        );
+
+        allow delete: if isAdminOf(companyId);
+      }
+    }
+
+    // memberships/{uid} is the fast-lookup pointer read on every app load.
+    // A user can only ever read or write their own.
+    match /memberships/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+  }
+}
