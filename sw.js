@@ -1,4 +1,4 @@
-const CACHE = 'inventro-shell-v80';
+const CACHE = 'inventro-shell-v82';
 const CORE = ['./','./index.html','./style.css?v=80','./app.js?v=80','./manifest.json'];
 
 self.addEventListener('install', event => {
