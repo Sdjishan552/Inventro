@@ -225,9 +225,14 @@ async function syncMyEmployeeProfile() {
 async function listEmployees() {
   const companyId = currentCompanyId();
   if (!companyId) return [];
-  const snap = await getDocs(collection(db, 'companies', companyId, 'employees'));
-  const employees = snap.docs.map((item) => ({ id: item.id, ...item.data() }))
-    .filter((employee) => employee.role !== 'admin');
+  // The Employees collection is already kept live by startRealtimeSync().
+  // Reuse that in-memory copy instead of re-reading the whole collection
+  // from Firestore every time the Admin/Requests/History screens open.
+  const useLiveCache = realtimeEmployeesReady && realtimeCompanyId === companyId;
+  const rawEmployees = useLiveCache
+    ? realtimeLatestEmployees.map(d => ({...d}))
+    : (await getDocs(collection(db, 'companies', companyId, 'employees'))).docs.map((item) => ({ id: item.id, ...item.data() }));
+  const employees = rawEmployees.filter((employee) => employee.role !== 'admin');
   employees.forEach(employee => {
     const email = String(employee.email || employee.id || '').trim().toLowerCase();
     if (email) employeeDirectory.set(email, {
@@ -569,8 +574,15 @@ async function fetchItemImage(itemName) {
 async function listItems(includeArchived=false) {
   const companyId = currentCompanyId();
   if (!companyId) return [];
-  const snap = await getDocs(collection(db,'companies',companyId,'items'));
-  const items = snap.docs.map(d => ({id:d.id,...d.data()})).filter(item => includeArchived || item.archived !== true);
+  // Items are already kept live by startRealtimeSync(). listItems() is
+  // called on almost every screen open (Stock, Dispatch, Receive, Requests,
+  // Stats, History, Admin), so reusing the in-memory copy instead of a fresh
+  // getDocs() here is the single biggest Firestore-read saving in the app.
+  const useLiveCache = realtimeItemsReady && realtimeCompanyId === companyId;
+  const rawItems = useLiveCache
+    ? realtimeLatestItems.map(d => ({...d}))
+    : (await getDocs(collection(db,'companies',companyId,'items'))).docs.map(d => ({id:d.id,...d.data()}));
+  const items = rawItems.filter(item => includeArchived || item.archived !== true);
 
   // Older items created before automatic images was improved can be upgraded
   // automatically when viewed by Admin/Inventory Manager.
@@ -721,8 +733,13 @@ function canManageRequests() { return membership?.role === 'inventory_manager'; 
 async function listRequests() {
   const companyId = currentCompanyId();
   if (!companyId) return [];
-  const snap = await getDocs(collection(db,'companies',companyId,'requests'));
-  return snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>{
+  // Requests are already kept live by startRealtimeSync(); reuse that copy
+  // instead of re-reading the whole collection every time this is called.
+  const useLiveCache = realtimeRequestsReady && realtimeCompanyId === companyId;
+  const raw = useLiveCache
+    ? realtimeLatestRequests.map(d => ({...d}))
+    : (await getDocs(collection(db,'companies',companyId,'requests'))).docs.map(d=>({id:d.id,...d.data()}));
+  return raw.sort((a,b)=>{
     const at=a.createdAt?.toMillis?.()||0, bt=b.createdAt?.toMillis?.()||0; return bt-at;
   });
 }
@@ -733,10 +750,15 @@ async function listRequestEvents() {
   const requests=await listRequests();
   const events=[];
   for(const r of requests){
-    const snap=await getDocs(collection(db,'companies',companyId,'requests',r.id,'events'));
-    snap.docs.forEach(d=>events.push({id:d.id,requestId:r.id,...d.data()}));
+    // syncRequestEventListeners() already keeps a live per-request events
+    // cache for every request this user is allowed to see; only fall back to
+    // a one-off read for the rare request it hasn't subscribed to yet.
+    const cached=realtimeRequestEventsCache.get(r.id);
+    const evDocs=Array.isArray(cached) ? cached
+      : (await getDocs(collection(db,'companies',companyId,'requests',r.id,'events'))).docs.map(d=>({id:d.id,requestId:r.id,...d.data()}));
+    evDocs.forEach(d=>events.push(d));
     // Backward-compatible fallback for old requests that predate event logging.
-    if(!snap.docs.length){
+    if(!evDocs.length){
       events.push({id:`legacy-${r.id}-pending`,requestId:r.id,eventType:'pending',itemId:r.itemId,itemName:r.itemName,quantity:r.quantity,unit:r.unit,department:r.department||'',requestedByUid:r.requestedByUid||'',requestedByEmail:r.requestedByEmail||'',requestedByRole:r.requestedByRole||'',actorUid:r.requestedByUid||'',actorEmail:r.requestedByEmail||'',actorRole:r.requestedByRole||'',createdAt:r.createdAt});
       if(r.status && r.status!=='pending'){
         events.push({id:`legacy-${r.id}-${r.status}`,requestId:r.id,eventType:r.status,itemId:r.itemId,itemName:r.itemName,quantity:r.quantity,unit:r.unit,department:r.department||'',requestedByUid:r.requestedByUid||'',requestedByEmail:r.requestedByEmail||'',requestedByRole:r.requestedByRole||'',actorUid:r.fulfilledByUid||r.reviewedByUid||'',actorEmail:r.fulfilledByEmail||r.reviewedByEmail||'',actorRole:'inventory_manager',createdAt:r.updatedAt||r.createdAt});
@@ -1526,11 +1548,21 @@ let realtimeUnsubscribers = [];
 let realtimeMovementUnsubs = new Map();
 let realtimeMovementCache = new Map();
 let realtimeRequestEventUnsubs = new Map();
+let realtimeRequestEventsCache = new Map();
 let realtimeRefreshTimer = null;
 let realtimeCompanyId = null;
 let realtimeStarted = false;
 let realtimeEmployeeRoleMap = new Map();
 let realtimeLatestItems = [];
+let realtimeLatestEmployees = [];
+let realtimeLatestRequests = [];
+// These flip true only once each collection's FIRST live snapshot has
+// actually arrived, so list*() below never serves an empty/stale cache
+// during the brief window after startRealtimeSync() is called but before
+// Firestore has delivered anything yet.
+let realtimeItemsReady = false;
+let realtimeEmployeesReady = false;
+let realtimeRequestsReady = false;
 let historyOpenLiveRequested = false;
 
 function stopRealtimeSync() {
@@ -1541,11 +1573,17 @@ function stopRealtimeSync() {
   realtimeMovementCache.clear();
   realtimeRequestEventUnsubs.forEach(fn => { try { fn(); } catch (_) {} });
   realtimeRequestEventUnsubs.clear();
+  realtimeRequestEventsCache.clear();
   if (realtimeRefreshTimer) { clearTimeout(realtimeRefreshTimer); realtimeRefreshTimer = null; }
   realtimeCompanyId = null;
   realtimeStarted = false;
   realtimeEmployeeRoleMap.clear();
   realtimeLatestItems = [];
+  realtimeLatestEmployees = [];
+  realtimeLatestRequests = [];
+  realtimeItemsReady = false;
+  realtimeEmployeesReady = false;
+  realtimeRequestsReady = false;
 }
 
 function scheduleRealtimeRefresh(kind) {
@@ -1604,7 +1642,7 @@ function syncMovementListeners(companyId, itemDocs) {
 function syncRequestEventListeners(companyId, requestDocs) {
   const ids = new Set(requestDocs.map(d => d.id));
   for (const [requestId, unsub] of realtimeRequestEventUnsubs) {
-    if (!ids.has(requestId)) { try { unsub(); } catch (_) {} realtimeRequestEventUnsubs.delete(requestId); }
+    if (!ids.has(requestId)) { try { unsub(); } catch (_) {} realtimeRequestEventUnsubs.delete(requestId); realtimeRequestEventsCache.delete(requestId); }
   }
   for (const request of requestDocs) {
     // Firestore rules do not permit a Chef/Request user to listen to another
@@ -1612,7 +1650,12 @@ function syncRequestEventListeners(companyId, requestDocs) {
     if (!['admin','inventory_manager'].includes(membership?.role) && request.data()?.requestedByUid !== auth.currentUser?.uid) continue;
     if (realtimeRequestEventUnsubs.has(request.id)) continue;
     const eventRef = collection(db,'companies',companyId,'requests',request.id,'events');
-    const unsub = onSnapshot(eventRef, () => scheduleRealtimeRefresh('request-events'), err => console.warn('Request event realtime listener:', err));
+    const unsub = onSnapshot(eventRef, snap => {
+      // Cache these instead of throwing them away, so listRequestEvents()
+      // doesn't have to re-read every request's events on every open.
+      realtimeRequestEventsCache.set(request.id, snap.docs.map(d => ({id:d.id, requestId:request.id, ...d.data()})));
+      scheduleRealtimeRefresh('request-events');
+    }, err => console.warn('Request event realtime listener:', err));
     realtimeRequestEventUnsubs.set(request.id, unsub);
   }
 }
@@ -1652,6 +1695,10 @@ function startRealtimeSync() {
   }, 'Company');
 
   add(collection(db,'companies',companyId,'employees'), (snap, wasFirst) => {
+    // Full employee docs, kept live so listEmployees() can reuse this instead
+    // of re-reading the whole collection on every Admin/Requests/History open.
+    realtimeLatestEmployees = snap.docs.map(d => ({id:d.id,...d.data()}));
+    realtimeEmployeesReady = true;
     // Keep a live email -> role map so movement listeners can correctly identify
     // Inventory Manager transactions even when older movement documents only have byEmail.
     realtimeEmployeeRoleMap = new Map(snap.docs.map(d => { const x=d.data()||{}; const email=(x.email||d.id||'').toLowerCase(); if (email) employeeDirectory.set(email,{name:String(x.displayName||x.name||'').trim(),role:x.role||''}); return [email, x.role||'']; }));
@@ -1692,6 +1739,7 @@ function startRealtimeSync() {
     // snapshot to enrich movement rows and must never depend on a local
     // home-page variable.
     realtimeLatestItems = docs;
+    realtimeItemsReady = true;
     syncMovementListeners(companyId, snap.docs);
     if (!wasFirst) scheduleRealtimeRefresh('items');
     if (view === 'stock') {
@@ -1703,6 +1751,8 @@ function startRealtimeSync() {
 
   add(collection(db,'companies',companyId,'requests'), (snap, wasFirst) => {
     const docs = snap.docs.map(d => ({id:d.id,...d.data()}));
+    realtimeLatestRequests = docs;
+    realtimeRequestsReady = true;
     syncRequestEventListeners(companyId, snap.docs);
     if (!wasFirst) scheduleRealtimeRefresh('requests');
     if (membership?.role === 'inventory_manager') updateRequestBadge(docs.filter(r => r.status === 'pending').length);
