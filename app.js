@@ -78,7 +78,17 @@ async function createCompany(companyName) {
 
 
 function isStockRequesterRole(role) { return ['stock_requester','chef','request'].includes(String(role||'').toLowerCase()); }
-function normalizedRole(role) { return isStockRequesterRole(role) ? 'stock_requester' : String(role||''); }
+function normalizedRole(role) {
+  const raw=String(role||'').trim().toLowerCase().replace(/\s+/g,'_');
+  if (['chef','request','stock_requisitioner','stock_requester'].includes(raw)) return 'stock_requester';
+  if (['inventorymanager','inventory_manager'].includes(raw)) return 'inventory_manager';
+  if (['transactionmanager','transaction_manager'].includes(raw)) return 'transaction_manager';
+  if (raw==='admin') return 'admin';
+  return raw;
+}
+function movementActorRole(row) {
+  return normalizedRole(row?.actorRole || row?.byRole || '');
+}
 function isEditableTransactionRole(role) { return ['inventory_manager','stock_requester','chef','request'].includes(String(role||'')); }
 
 async function verifyEmployeeCode(code) {
@@ -675,11 +685,14 @@ async function changeStock(itemId, amount, type, note='', options={}) {
   const companyId = currentCompanyId(), user = auth.currentUser;
   if (!companyId || !user) throw new Error('Your company session is not available.');
   // Re-check the authoritative employee role immediately before writing. This
-  // prevents a stale client membership from being mistaken for permission.
+  // prevents a stale client membership from being mistaken for permission AND
+  // makes sure every new movement is tagged with the same canonical role used
+  // by the history/report filters.
+  let authoritativeRole = normalizedRole(membership?.role || '');
   if (user.email) {
     const employeeSnap = await getDoc(doc(db,'companies',companyId,'employees',user.email.toLowerCase()));
     if (!employeeSnap.exists() || employeeSnap.data()?.status !== 'active') throw new Error('Your employee access is not active. Please ask the Admin to enable it.');
-    const authoritativeRole = String(employeeSnap.data()?.role || '').toLowerCase();
+    authoritativeRole = normalizedRole(employeeSnap.data()?.role || '');
     if (type === 'dispatch' && !['admin','inventory_manager'].includes(authoritativeRole)) throw new Error('Your current Firebase role is not allowed to dispatch stock.');
     if (type === 'receive' && !['admin','inventory_manager'].includes(authoritativeRole)) throw new Error('Your current Firebase role is not allowed to receive stock.');
   }
@@ -710,11 +723,11 @@ async function changeStock(itemId, amount, type, note='', options={}) {
       update.procurementFulfilledByEmail = user.email?.toLowerCase() || '';
     }
     tx.update(ref,update);
-    tx.set(movementRef,{type,quantity:n,unit:item.unit,itemName:item.name,department:cleanDepartment,note:note.trim(),byUid:user.uid,byEmail:user.email?.toLowerCase() || '',byRole:membership?.role || '',byName:user.displayName || '',createdAt:serverTimestamp(),
+    tx.set(movementRef,{type,quantity:n,unit:item.unit,itemName:item.name,department:cleanDepartment,note:note.trim(),byUid:user.uid,byEmail:user.email?.toLowerCase() || '',byRole:authoritativeRole,byName:user.displayName || '',createdAt:serverTimestamp(),
       ...(fulfillOrder && item.procurementStatus === 'ordered' ? {procurementEvent:'order_fulfilled',orderId:item.procurementOrderId||'',orderSentAt:item.procurementOrderSentAt||null} : {})
     });
     if (fulfillOrder && item.procurementStatus === 'ordered') {
-      tx.set(doc(collection(ref,'movements')),{type:'order_fulfilled',quantity:n,unit:item.unit,itemName:item.name,note:`Supplier order fulfilled${item.procurementOrderId?` (${item.procurementOrderId})`:''}`,orderId:item.procurementOrderId||'',byUid:user.uid,byEmail:user.email?.toLowerCase()||'',byRole:membership?.role||'',byName:user.displayName || '',createdAt:serverTimestamp()});
+      tx.set(doc(collection(ref,'movements')),{type:'order_fulfilled',quantity:n,unit:item.unit,itemName:item.name,note:`Supplier order fulfilled${item.procurementOrderId?` (${item.procurementOrderId})`:''}`,orderId:item.procurementOrderId||'',byUid:user.uid,byEmail:user.email?.toLowerCase()||'',byRole:authoritativeRole,byName:user.displayName || '',createdAt:serverTimestamp()});
     }
   });
 }
@@ -939,7 +952,7 @@ async function listHistory() {
         itemId:item.id,
         itemName:data.itemName || item.name || '',
         unit:data.unit || item.unit || '',
-        actorRole:data.byRole || data.actorRole || realtimeEmployeeRoleMap.get(String(data.byEmail||'').toLowerCase()) || '', actorName:data.byName || data.actorName || employeeDirectory.get(String(data.byEmail||'').toLowerCase())?.name || ''
+        actorRole:normalizedRole(data.byRole || data.actorRole || realtimeEmployeeRoleMap.get(String(data.byEmail||'').toLowerCase()) || ''), actorName:data.byName || data.actorName || employeeDirectory.get(String(data.byEmail||'').toLowerCase())?.name || ''
       })));
     }
     movementDocs.forEach(data=>{
@@ -1650,7 +1663,7 @@ function syncMovementListeners(companyId, itemDocs) {
           id:d.id, ...data, itemId:item.id,
           itemName:data.itemName || itemData.name || '',
           unit:data.unit || itemData.unit || '',
-          actorRole:data.byRole || data.actorRole || realtimeEmployeeRoleMap.get(byEmail) || '', actorName:data.byName || data.actorName || employeeDirectory.get(byEmail)?.name || ''
+          actorRole:normalizedRole(data.byRole || data.actorRole || realtimeEmployeeRoleMap.get(byEmail) || ''), actorName:data.byName || data.actorName || employeeDirectory.get(byEmail)?.name || ''
         };
       }));
       scheduleRealtimeRefresh('movements');
@@ -1675,7 +1688,7 @@ async function loadFullMovementHistory(){
         id:d.id,...data,itemId:item.id,
         itemName:data.itemName||item.name||'',
         unit:data.unit||item.unit||'',
-        actorRole:data.byRole||data.actorRole||realtimeEmployeeRoleMap.get(byEmail)||'',
+        actorRole:normalizedRole(data.byRole||data.actorRole||realtimeEmployeeRoleMap.get(byEmail)||''),
         actorName:data.byName||data.actorName||employeeDirectory.get(byEmail)?.name||''
       };
     });
@@ -2472,14 +2485,14 @@ function movementSignedQuantity(r){
   return (r?.type==='opening'||r?.type==='receive') ? n : r?.type==='dispatch' ? -n : 0;
 }
 function buildTransactionManagerDailyReport(rows, day, options={}) {
-  const ledgerRows = rows.map(r => ({...r, actorRole:r.actorRole || r.byRole || realtimeEmployeeRoleMap.get(String(r.byEmail||'').toLowerCase()) || ''})).filter(stockAffectingMovement);
+  const ledgerRows = rows.map(r => ({...r, actorRole:movementActorRole(r)})).filter(stockAffectingMovement);
   const targetStart = new Date(`${day}T00:00:00`).getTime();
   const targetEnd = new Date(`${day}T00:00:00`); targetEnd.setDate(targetEnd.getDate()+1);
   const endMs=targetEnd.getTime();
   const before = ledgerRows.filter(r => movementMillis(r) < targetStart);
   const duringDay = ledgerRows.filter(r => { const t=movementMillis(r); return t>=targetStart && t<endMs; });
 
-  const imDayRows = duringDay.filter(r => (r.byRole||r.actorRole)==='inventory_manager');
+  const imDayRows = duringDay.filter(r => movementActorRole(r)==='inventory_manager');
   const activity=options.activity||'all', department=options.department||'all';
   const visibleRows=imDayRows.filter(r => (activity==='all'||r.type===activity) && (department==='all'||(r.department||'')===department));
 
@@ -2653,7 +2666,7 @@ async function renderHistory(forcedRole=null){
     }
     if(selectedRole==='inventory_manager'){
       // Inventory Manager log book is the physical stock ledger: receiving and dispatching.
-      return rows.filter(r=>r.actorRole==='inventory_manager').map(r=>({kind:'movement',time:r.createdAt,...r})).sort((a,b)=>(b.time?.toMillis?.()||0)-(a.time?.toMillis?.()||0));
+      return rows.filter(r=>movementActorRole(r)==='inventory_manager').map(r=>({kind:'movement',time:r.createdAt,...r})).sort((a,b)=>(b.time?.toMillis?.()||0)-(a.time?.toMillis?.()||0));
     }
         // Admin is intentionally not an account card anymore. Keep this fallback for non-card callers.
     const movementRows=rows.filter(r=>r.actorRole===selectedRole).map(r=>({kind:'movement',time:r.createdAt,...r}));
@@ -2667,8 +2680,8 @@ async function renderHistory(forcedRole=null){
     const statement=root.querySelector('#daily-statement');
     if(statement){
       if(selectedRole==='transaction_manager'){
-        const day=opts.day||today; const dayRows=rows.filter(r=>r.actorRole==='inventory_manager' && isDate(r.createdAt,day));
-        const before=rows.filter(r=>r.actorRole==='inventory_manager' && (r.createdAt?.toMillis?.()||0) < new Date(`${day}T00:00:00`).getTime());
+        const day=opts.day||today; const dayRows=rows.filter(r=>movementActorRole(r)==='inventory_manager' && isDate(r.createdAt,day));
+        const before=rows.filter(r=>movementActorRole(r)==='inventory_manager' && (r.createdAt?.toMillis?.()||0) < new Date(`${day}T00:00:00`).getTime());
         const ids=[...new Set([...before,...dayRows].map(r=>r.itemId))];
         const statements=ids.map(id=>{const allBefore=before.filter(r=>r.itemId===id);const todayRows=dayRows.filter(r=>r.itemId===id);const itemName=(todayRows[0]||allBefore[0])?.itemName||id;const unit=(todayRows[0]||allBefore[0])?.unit||'';let opening=0;for(const r of allBefore){const n=Number(r.quantity||0);if(r.type==='opening'||r.type==='receive')opening+=n;else if(r.type==='dispatch')opening-=n;}let received=0,dispatched=0;for(const r of todayRows){const n=Number(r.quantity||0);if(r.type==='receive')received+=n;else if(r.type==='dispatch')dispatched+=n;}return {itemName,unit,opening,received,dispatched,closing:opening+received-dispatched};}).filter(x=>x.opening||x.received||x.dispatched);
         statement.hidden=false; statement.innerHTML=`<div class="daily-statement-head"><div><strong>📘 Daily transaction statement</strong><span>${escapeHtml(day)} · Closing balance becomes the next day's opening balance.</span></div></div><div class="statement-grid">${statements.map(x=>`<div class="statement-row"><strong>${escapeHtml(x.itemName)}</strong><span>Opening <b>${x.opening} ${escapeHtml(x.unit)}</b></span><span>Received <b>+${x.received} ${escapeHtml(x.unit)}</b></span><span>Dispatched <b>−${x.dispatched} ${escapeHtml(x.unit)}</b></span><span>Closing <b>${x.closing} ${escapeHtml(x.unit)}</b></span></div>`).join('')||'<div class="empty-team">No transaction statement for this day.</div>'}</div>`;
@@ -2742,17 +2755,29 @@ async function renderHistory(forcedRole=null){
     if(selectedRole==='transaction_manager'){ const ledger=combinedForRole('inventory_manager'); const own=requestEvents.filter(e=>e.requestedByUid===auth.currentUser?.uid || e.requestedByRole==='transaction_manager').map(e=>({kind:'request',time:e.createdAt,...e})); return [...ledger,...own].sort((a,b)=>(b.time?.toMillis?.()||0)-(a.time?.toMillis?.()||0)); }
     return combinedForRole(role);
   };
-  const refreshList=()=>{
-    let list=buildList();
-    if(isStockRequesterRole(role)) list=list.filter(r=>(r.kind==='request') || (r.kind==='movement'&&r.type==='dispatch'&&r.requestId));
-    if(role==='inventory_manager') list=list.filter(r=>r.kind==='movement'&&(r.type==='receive'||r.type==='dispatch'));
-    if(role==='transaction_manager') list=list.filter(r=>(r.kind==='movement'&&r.actorRole==='inventory_manager') || (r.kind==='request'&&r.requestedByUid===auth.currentUser?.uid));
+  let refreshSerial=0;
+  const refreshList=async()=>{
+    const serial=++refreshSerial;
     const selectedDay=root.querySelector('#history-day')?.value||today;
-    renderRows(list,{day:selectedDay});
-    if(selectedRole==='transaction_manager') {
-      const activity=root.querySelector('#history-type')?.value||'all';
-      const department=root.querySelector('#history-department')?.value||'all';
-      renderTransactionManagerLiveReport(root,rows,selectedDay,{activity: activity==='received'?'receive':activity==='dispatched'?'dispatch':activity==='all'?'all':'all',department});
+    try {
+      // Always hydrate the exact selected day before filtering. The live cache is
+      // intentionally only 7 days; older dates are fetched from the complete
+      // movement ledger on demand. This keeps every account wired to the same
+      // authoritative movement records instead of reusing yesterday's rows.
+      rows = selectedDay===today ? await listHistory() : await getMovementRowsForDay(selectedDay);
+      if(serial!==refreshSerial) return;
+      let list=buildList();
+      if(isStockRequesterRole(role)) list=list.filter(r=>(r.kind==='request') || (r.kind==='movement'&&r.type==='dispatch'&&r.requestId));
+      if(role==='inventory_manager') list=list.filter(r=>r.kind==='movement'&&(r.type==='receive'||r.type==='dispatch'));
+      if(role==='transaction_manager') list=list.filter(r=>(r.kind==='movement'&&movementActorRole(r)==='inventory_manager') || (r.kind==='request'&&r.requestedByUid===auth.currentUser?.uid));
+      renderRows(list,{day:selectedDay});
+      if(selectedRole==='transaction_manager') {
+        const activity=root.querySelector('#history-type')?.value||'all';
+        const department=root.querySelector('#history-department')?.value||'all';
+        renderTransactionManagerLiveReport(root,rows,selectedDay,{activity: activity==='received'?'receive':activity==='dispatched'?'dispatch':'all',department});
+      }
+    } catch(err) {
+      if(serial===refreshSerial) showTemporaryMessage(friendlyError(err),'error');
     }
   };
   const attachHistoryActions=()=>{
@@ -2766,9 +2791,9 @@ async function renderHistory(forcedRole=null){
     root.querySelector('#history-refresh').addEventListener('click',()=>renderHistory());
     return;
   }
-  root.querySelector('#history-type')?.addEventListener('change',refreshList);
-  root.querySelector('#history-department')?.addEventListener('change',refreshList);
-  root.querySelector('#history-day')?.addEventListener('change',refreshList);
+  root.querySelector('#history-type')?.addEventListener('change',()=>{refreshList();});
+  root.querySelector('#history-department')?.addEventListener('change',()=>{refreshList();});
+  root.querySelector('#history-day')?.addEventListener('change',()=>{refreshList();});
   root.querySelector('#history-today')?.addEventListener('click',()=>{root.querySelector('#history-day').value=today;refreshList();});
   // When Admin entered a history card, Back must return to the three-card
   // History menu, not jump all the way to Home. Other roles keep their normal
@@ -2806,9 +2831,9 @@ async function renderStats(){
   const role=membership?.role||'';
   const ownRequests = requests.filter(r=>r.requestedByUid===auth.currentUser?.uid || normalizedRole(r.requestedByRole)===normalizedRole(role));
   const activeRows=rows.filter(r=>r.deleted!==true && r.active!==false);
-  const roleRows = role==='inventory_manager' ? activeRows.filter(r=>r.actorRole==='inventory_manager')
+  const roleRows = role==='inventory_manager' ? activeRows.filter(r=>movementActorRole(r)==='inventory_manager')
     : isStockRequesterRole(role) ? activeRows.filter(r=>isStockRequesterRole(r.actorRole) || (r.type==='dispatch' && r.requestedByUid===auth.currentUser?.uid))
-    : role==='transaction_manager' ? activeRows.filter(r=>r.actorRole==='inventory_manager' || r.requestedByUid===auth.currentUser?.uid || r.requestedByRole==='transaction_manager')
+    : role==='transaction_manager' ? activeRows.filter(r=>movementActorRole(r)==='inventory_manager' || r.requestedByUid===auth.currentUser?.uid || r.requestedByRole==='transaction_manager')
     : activeRows;
   const visibleRequests = role==='admin' || role==='inventory_manager' ? requests : ownRequests;
   const received=roleRows.filter(r=>r.type==='receive');
