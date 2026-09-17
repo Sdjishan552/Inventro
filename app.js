@@ -3,7 +3,7 @@ import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, collection, getDoc, getDocs, setDoc, deleteDoc, updateDoc, serverTimestamp, writeBatch, onSnapshot, runTransaction, enableMultiTabIndexedDbPersistence
+  getFirestore, doc, collection, getDoc, getDocs, setDoc, deleteDoc, updateDoc, serverTimestamp, writeBatch, onSnapshot, runTransaction, query, where, enableMultiTabIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // ---- Your Firebase project. Not a secret — see SETUP-EASY.md for why. ----
@@ -627,14 +627,15 @@ async function createInventoryItem({name,unit,openingStock,lowStockAlert}) {
 
   const imageUrl = await fetchItemImage(cleanName);
   await setDoc(ref,{
-    name:cleanName,nameLower,unit,quantity,lowStockAlert:low,
+    name:cleanName,nameLower,unit,quantity,openingStock:quantity,lowStockAlert:low,
     imageUrl:imageUrl.url || '',imageSource:imageUrl.source || '',
     createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
     updatedBy:user.uid,updatedByEmail:user.email?.toLowerCase() || ''
   });
   await setDoc(doc(ref,'movements',`${Date.now()}-opening`),{
     type:'opening',quantity,unit,itemName:cleanName,note:'Opening stock',
-    byUid:user.uid,byEmail:user.email?.toLowerCase() || '',byRole:membership?.role || '',createdAt:serverTimestamp()
+    byUid:user.uid,byEmail:user.email?.toLowerCase() || '',byRole:membership?.role || '',
+    openingStock:quantity,createdAt:serverTimestamp()
   });
 }
 
@@ -921,12 +922,17 @@ async function listHistory() {
   const rows=[];
   for(const item of items){
     let movementDocs = realtimeMovementCache.get(item.id);
-    // An empty realtime cache is not proof that an item has no history: the
-    // listener may still be starting, or it may have been recreated after the
-    // employee-role map changed. Fall back to Firestore whenever the cache is
-    // absent OR empty so historical data is never displayed as zero.
-    if(!Array.isArray(movementDocs) || movementDocs.length===0){
-      const snap=await getDocs(collection(db,'companies',currentCompanyId(),'items',item.id,'movements'));
+    // The live listener intentionally contains only the last 7 days. An empty
+    // cache is valid when this item has had no movement in that window, so do
+    // not fall back to the entire ledger just because the array is empty.
+    if(!realtimeMovementCache.has(item.id)){
+      // Never fall back to the complete ledger for normal/current-page history.
+      // Older history is loaded explicitly by getMovementRowsForDay(day).
+      const movementRef=query(
+        collection(db,'companies',currentCompanyId(),'items',item.id,'movements'),
+        where('createdAt','>=',movementLiveStartDate())
+      );
+      const snap=await getDocs(movementRef);
       movementDocs=snap.docs.map(d=>({id:d.id,...d.data()}));
       realtimeMovementCache.set(item.id, movementDocs.map(data=>({
         ...data,
@@ -1545,8 +1551,11 @@ let homeStatusUnsubscribe = null;
 // Global real-time synchronization.  These listeners stay alive for the whole
 // signed-in company session so pages never depend on a manual Refresh button.
 let realtimeUnsubscribers = [];
+const MOVEMENT_LIVE_DAYS = 7;
 let realtimeMovementUnsubs = new Map();
 let realtimeMovementCache = new Map();
+let fullMovementCache = new Map();
+let fullMovementCacheCompanyId = null;
 let realtimeRequestEventUnsubs = new Map();
 let realtimeRequestEventsCache = new Map();
 let realtimeRefreshTimer = null;
@@ -1571,6 +1580,8 @@ function stopRealtimeSync() {
   realtimeMovementUnsubs.forEach(fn => { try { fn(); } catch (_) {} });
   realtimeMovementUnsubs.clear();
   realtimeMovementCache.clear();
+  fullMovementCache.clear();
+  fullMovementCacheCompanyId = null;
   realtimeRequestEventUnsubs.forEach(fn => { try { fn(); } catch (_) {} });
   realtimeRequestEventUnsubs.clear();
   realtimeRequestEventsCache.clear();
@@ -1613,6 +1624,13 @@ function scheduleRealtimeRefresh(kind) {
   }, 120);
 }
 
+function movementLiveStartDate(){
+  const d=new Date();
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-(MOVEMENT_LIVE_DAYS-1));
+  return d;
+}
+
 function syncMovementListeners(companyId, itemDocs) {
   const ids = new Set(itemDocs.map(d => d.id));
   for (const [itemId, unsub] of realtimeMovementUnsubs) {
@@ -1620,7 +1638,10 @@ function syncMovementListeners(companyId, itemDocs) {
   }
   for (const item of itemDocs) {
     if (realtimeMovementUnsubs.has(item.id)) continue;
-    const movementRef = collection(db,'companies',companyId,'items',item.id,'movements');
+    const movementRef = query(
+      collection(db,'companies',companyId,'items',item.id,'movements'),
+      where('createdAt','>=',movementLiveStartDate())
+    );
     const unsub = onSnapshot(movementRef, snap => {
       const itemData = realtimeLatestItems.find(x => x.id === item.id) || {};
       realtimeMovementCache.set(item.id, snap.docs.map(d => {
@@ -1637,6 +1658,51 @@ function syncMovementListeners(companyId, itemDocs) {
     }, err => console.warn('Movement realtime listener:', err));
     realtimeMovementUnsubs.set(item.id, unsub);
   }
+}
+
+async function loadFullMovementHistory(){
+  const companyId=currentCompanyId();
+  if(!companyId) return new Map();
+  if(fullMovementCacheCompanyId===companyId && fullMovementCache.size) return fullMovementCache;
+  fullMovementCache.clear();
+  fullMovementCacheCompanyId=companyId;
+  const items=await listItems(true);
+  await Promise.all(items.map(async item=>{
+    const snap=await getDocs(collection(db,'companies',companyId,'items',item.id,'movements'));
+    const rows=snap.docs.map(d=>{
+      const data=d.data()||{};
+      const byEmail=String(data.byEmail||'').toLowerCase();
+      return {
+        id:d.id,...data,itemId:item.id,
+        itemName:data.itemName||item.name||'',
+        unit:data.unit||item.unit||'',
+        actorRole:data.byRole||data.actorRole||realtimeEmployeeRoleMap.get(byEmail)||'',
+        actorName:data.byName||data.actorName||employeeDirectory.get(byEmail)?.name||''
+      };
+    });
+    fullMovementCache.set(item.id,rows);
+  }));
+  return fullMovementCache;
+}
+
+function movementRowsFromCache(){
+  const rows=[];
+  realtimeMovementCache.forEach((movementRows,itemId)=>{
+    (movementRows||[]).forEach(r=>rows.push({itemId,...r}));
+  });
+  return rows;
+}
+
+async function getMovementRowsForDay(day){
+  const today=localDateKey();
+  if(day===today) return movementRowsFromCache();
+  const targetStart=new Date(`${day}T00:00:00`).getTime();
+  const liveStart=movementLiveStartDate().getTime();
+  if(targetStart>=liveStart) return movementRowsFromCache();
+  const full=await loadFullMovementHistory();
+  const rows=[];
+  full.forEach((movementRows,itemId)=>(movementRows||[]).forEach(r=>rows.push({itemId,...r})));
+  return rows;
 }
 
 function syncRequestEventListeners(companyId, requestDocs) {
@@ -2015,7 +2081,7 @@ function getRealtimeMovementRows() {
   return rows;
 }
 
-function renderTransactionManagerHomeReport() {
+async function renderTransactionManagerHomeReport() {
   const target = document.querySelector('#tm-home-live-report');
   if (!target || membership?.role !== 'transaction_manager') return;
   const dateEl = document.querySelector('#tm-home-report-date');
@@ -2024,10 +2090,11 @@ function renderTransactionManagerHomeReport() {
   const day = dateEl?.value || localDateKey();
   const activity = activityEl?.value || 'all';
   const department = deptEl?.value || 'all';
-  const allRows = getRealtimeMovementRows();
-  const {reports, todayRows} = buildTransactionManagerDailyReport(allRows, day, {activity,department});
+  const reportRows = await getMovementRowsForDay(day);
+  const reportItems = await listItems();
+  const {reports, todayRows} = buildTransactionManagerDailyReport(reportRows, day, {activity,department,items:reportItems});
   const live = day === localDateKey();
-  const departments = [...new Set(getRealtimeMovementRows().filter(r=>(r.byRole||r.actorRole)==='inventory_manager' && r.department).map(r=>r.department))].sort((a,b)=>a.localeCompare(b));
+  const departments = [...new Set(reportRows.filter(r=>(r.byRole||r.actorRole)==='inventory_manager' && r.department).map(r=>r.department))].sort((a,b)=>a.localeCompare(b));
   if (deptEl) {
     const current = deptEl.value || 'all';
     deptEl.innerHTML = '<option value="all">All departments</option>' + departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
@@ -2441,9 +2508,6 @@ function movementSignedQuantity(r){
   return (r?.type==='opening'||r?.type==='receive') ? n : r?.type==='dispatch' ? -n : 0;
 }
 function buildTransactionManagerDailyReport(rows, day, options={}) {
-  // IMPORTANT: opening/closing balances must be calculated from the COMPLETE stock ledger.
-  // Role/activity/department filters are only for the visible transaction feed and summary.
-  // Otherwise selecting "Dispatched" would incorrectly remove receipts from the balance.
   const ledgerRows = rows.map(r => ({...r, actorRole:r.actorRole || r.byRole || realtimeEmployeeRoleMap.get(String(r.byEmail||'').toLowerCase()) || ''})).filter(stockAffectingMovement);
   const targetStart = new Date(`${day}T00:00:00`).getTime();
   const targetEnd = new Date(`${day}T00:00:00`); targetEnd.setDate(targetEnd.getDate()+1);
@@ -2451,25 +2515,46 @@ function buildTransactionManagerDailyReport(rows, day, options={}) {
   const before = ledgerRows.filter(r => movementMillis(r) < targetStart);
   const duringDay = ledgerRows.filter(r => { const t=movementMillis(r); return t>=targetStart && t<endMs; });
 
-  // Transaction Manager reports IM activity, but stock balances include every legitimate
-  // stock-affecting movement (especially the Admin-created opening-stock movement).
   const imDayRows = duringDay.filter(r => (r.byRole||r.actorRole)==='inventory_manager');
   const activity=options.activity||'all', department=options.department||'all';
   const visibleRows=imDayRows.filter(r => (activity==='all'||r.type===activity) && (department==='all'||(r.department||'')===department));
 
-  const itemIds=[...new Set([...before,...duringDay].map(r=>r.itemId))];
+  const today=day===localDateKey();
+  const itemMap=new Map((options.items||[]).map(i=>[i.id,i]));
+  const itemIds=[...new Set((today ? duringDay : [...before,...duringDay]).map(r=>r.itemId||r.id).filter(Boolean))];
+
   const reports=itemIds.map(itemId=>{
     const prior=before.filter(r=>r.itemId===itemId);
     const dayAll=duringDay.filter(r=>r.itemId===itemId);
     const dayIm=imDayRows.filter(r=>r.itemId===itemId);
-    const sample=dayAll[0]||prior.slice().sort((a,b)=>movementMillis(b)-movementMillis(a))[0];
+    const sample=dayAll[0]||prior.slice().sort((a,b)=>movementMillis(b)-movementMillis(a))[0]||itemMap.get(itemId);
     if(!sample) return null;
-    const opening=prior.reduce((sum,r)=>sum+movementSignedQuantity(r),0);
+
+    let opening;
+    const liveStartMs=movementLiveStartDate().getTime();
+    const isLiveWindowDay=targetStart>=liveStartMs && targetStart<=new Date(`${localDateKey()}T00:00:00`).getTime();
+    if(isLiveWindowDay && itemMap.has(itemId)){
+      // The live cache intentionally contains only 7 days, so it cannot safely
+      // calculate an opening balance by summing rows before the selected day.
+      // Instead, use the item's authoritative current stock and subtract every
+      // non-opening movement from the selected day forward. Opening-stock
+      // movements are treated as the baseline, not as an intraday receipt.
+      const currentQty=Number(itemMap.get(itemId).quantity||0);
+      const netFromSelectedDay=ledgerRows
+        .filter(r=>r.itemId===itemId && movementMillis(r)>=targetStart && r.type!=='opening')
+        .reduce((sum,r)=>sum+movementSignedQuantity(r),0);
+      opening=currentQty-netFromSelectedDay;
+    }else{
+      opening=prior.reduce((sum,r)=>sum+movementSignedQuantity(r),0);
+      // If the item was created with opening stock on this same day, that opening
+      // movement is the day's opening balance, not a receipt during the day.
+      opening+=dayAll.filter(r=>r.type==='opening').reduce((sum,r)=>sum+Number(r.quantity||0),0);
+    }
+
     const received=dayIm.filter(r=>r.type==='receive').reduce((sum,r)=>sum+Number(r.quantity||0),0);
     const dispatched=dayIm.filter(r=>r.type==='dispatch').reduce((sum,r)=>sum+Number(r.quantity||0),0);
-    // True closing is the full ledger closing, not merely IM received-dispatched.
-    const closing=opening+dayAll.reduce((sum,r)=>sum+movementSignedQuantity(r),0);
-    return {itemId,itemName:sample.itemName,unit:sample.unit||'',opening,received,dispatched,closing,transactions:dayIm,
+    const closing=opening+dayAll.filter(r=>r.type!=='opening').reduce((sum,r)=>sum+movementSignedQuantity(r),0);
+    return {itemId,itemName:sample.itemName||sample.name||itemMap.get(itemId)?.name||itemId,unit:sample.unit||itemMap.get(itemId)?.unit||'',opening,received,dispatched,closing,transactions:dayIm,
       hasNegativeOpening:opening<0,hasNegativeClosing:closing<0};
   }).filter(Boolean).sort((a,b)=>a.itemName.localeCompare(b.itemName,undefined,{sensitivity:'base'}));
   return {reports,todayRows:visibleRows,allInventoryManagerRows:imDayRows};
@@ -2479,7 +2564,8 @@ function renderTransactionManagerLiveReport(root, rows, day, options={}) {
   if(!target) return;
   const today=localDateKey();
   const live=day===today;
-  const {reports,todayRows}=buildTransactionManagerDailyReport(rows,day,options);
+  const reportItems=options.items || realtimeLatestItems;
+  const {reports,todayRows}=buildTransactionManagerDailyReport(rows,day,{...options,items:reportItems});
   const updated=todayRows.map(r=>r.createdAt?.toMillis?.()||0).filter(Boolean).sort((a,b)=>b-a)[0];
   const latest=updated ? formatDate(new Date(updated)) : 'No transactions yet';
   target.innerHTML=`
@@ -2529,9 +2615,12 @@ async function renderHistory(forcedRole=null){
   const adminMenuOnly=isAdmin && !selectedRole;
   const today=localDateKey();
   const currentEmail=(auth.currentUser?.email||'').toLowerCase();
+  const selectedDayForLoad = document.querySelector('#history-day')?.value || today;
   let rows=[],departments=[],requestEvents=[],requestRecords=[],employees=[],error='';
   try{
-    rows=await listHistory();
+    rows=selectedRole && selectedDayForLoad && selectedDayForLoad !== today
+      ? await getMovementRowsForDay(selectedDayForLoad)
+      : await listHistory();
     requestRecords=await listRequests();
     departments=await listDepartments();
     employees=await listEmployees();
@@ -2738,7 +2827,15 @@ function quantitySummary(rows){
 
 async function renderStats(){
   let items=[],rows=[],requests=[],error='';
-  try{items=await listItems();rows=await listHistory();requests=await listRequests();}
+  try{
+    items=await listItems();
+    rows=await listHistory();
+    const statsStart=movementLiveStartDate().getTime();
+    rows=rows.filter(r=>movementMillis(r)>=statsStart);
+    requests=await listRequests();
+    const statsStartDate=movementLiveStartDate().getTime();
+    requests=requests.filter(r=>(r.updatedAt?.toMillis?.()||r.createdAt?.toMillis?.()||0)>=statsStartDate);
+  }
   catch(err){error=friendlyError(err);}
   const role=membership?.role||'';
   const ownRequests = requests.filter(r=>r.requestedByUid===auth.currentUser?.uid || normalizedRole(r.requestedByRole)===normalizedRole(role));
@@ -2766,24 +2863,27 @@ async function renderStats(){
     {label:'Good stock',value:items.filter(i=>Number(i.quantity||0)>Number(i.lowStockAlert||0)).length},
     {label:'Low stock',value:lowItems.length}
   ].filter(x=>x.value>0);
-  // This week vs last week (rolling 7-day windows) — reuses the same rows
-  // already fetched above, no extra Firestore reads.
+  // Stats are intentionally limited to the last 7 calendar days.
+  // Build a simple daily receive/dispatch chart from the already-filtered rows.
   const dayMs=86400000;
   const startOfToday=(()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth(),n.getDate());})();
-  const thisWeekStart=new Date(startOfToday.getTime()-6*dayMs);
-  const thisWeekEndExclusive=new Date(startOfToday.getTime()+dayMs);
-  const lastWeekStart=new Date(startOfToday.getTime()-13*dayMs);
-  const sumInRange=(source,start,endExclusive)=>source.reduce((a,r)=>{const d=r.createdAt?.toDate?.()||new Date(r.createdAt||0);return (d>=start&&d<endExclusive)?a+Number(r.quantity||0):a;},0);
-  const weekCompare={
-    labels:['Last week','This week'],
-    received:[sumInRange(received,lastWeekStart,thisWeekStart),sumInRange(received,thisWeekStart,thisWeekEndExclusive)],
-    dispatched:[sumInRange(dispatched,lastWeekStart,thisWeekStart),sumInRange(dispatched,thisWeekStart,thisWeekEndExclusive)]
-  };
+  const dayKey=(d)=>localDateKey(d);
+  const sumForDay=(source,day)=>source.reduce((a,r)=>{const d=r.createdAt?.toDate?.()||new Date(r.createdAt||0);return dayKey(d)===day?a+Number(r.quantity||0):a;},0);
+  const sevenDayLabels=[];
+  const sevenDayReceived=[];
+  const sevenDayDispatched=[];
+  for(let i=6;i>=0;i--){
+    const d=new Date(startOfToday.getTime()-i*dayMs);
+    const key=dayKey(d);
+    sevenDayLabels.push(i===0?'Today':d.toLocaleDateString(undefined,{weekday:'short',day:'numeric'}));
+    sevenDayReceived.push(sumForDay(received,key));
+    sevenDayDispatched.push(sumForDay(dispatched,key));
+  }
   const receivedSummary=quantitySummary(received);
   const dispatchedSummary=quantitySummary(dispatched);
   const roleTitle=role==='admin'?'Company-wide':roleLabel(role);
   const roleDesc={admin:'Company-wide inventory and transaction insights.',inventory_manager:'Your receiving, dispatch and request-workflow insights.',transaction_manager:'Inventory Manager transactions plus your own request activity.',stock_requester:'Your stock requests and fulfilled-dispatch activity.',chef:'Your stock requests and fulfilled-dispatch activity.',request:'Your stock requests and fulfilled-dispatch activity.'}[role]||'Your inventory activity and insights.';
-  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1><p>${escapeHtml(roleDesc)}</p></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
+  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1><p>${escapeHtml(roleDesc)} Activity cards and transaction charts use the last 7 days.</p></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
   <div class="stat-grid stats-summary">
     <div class="stat-card"><strong>${items.length}</strong><span>Total items</span></div>
     <div class="stat-card"><strong>${received.length}</strong><span>Receive transactions</span></div>
@@ -2800,7 +2900,7 @@ async function renderStats(){
     <div class="chart-grid stats-chart-grid">
       <div class="chart-card"><h3>📊 Top 8 items · dispatched vs received</h3><canvas id="stats-top8"></canvas></div>
       <div class="chart-card"><h3>🥧 Current stock health</h3><canvas id="stats-stock-health"></canvas></div>
-      <div class="chart-card"><h3>📈 This week vs last week</h3><canvas id="stats-week-compare"></canvas></div>
+      <div class="chart-card"><h3>📈 Last 7 days</h3><canvas id="stats-week-compare"></canvas></div>
     </div>
   </section></div>`;
   if(!window.Chart){await new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';sc.onload=resolve;sc.onerror=reject;document.head.appendChild(sc);}).catch(()=>{});}
@@ -2808,7 +2908,7 @@ async function renderStats(){
     const top8Canvas=root.querySelector('#stats-top8');
     if(top8Canvas) new Chart(top8Canvas,{type:'bar',data:{labels:combinedTop8.map(x=>x.name),datasets:[{label:'Dispatched',data:combinedTop8.map(x=>x.dispatched)},{label:'Received',data:combinedTop8.map(x=>x.received)}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{x:{beginAtZero:true}}}});
     new Chart(root.querySelector('#stats-stock-health'),{type:'doughnut',data:{labels:statusPie.map(x=>x.label),datasets:[{data:statusPie.map(x=>x.value)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
-    new Chart(root.querySelector('#stats-week-compare'),{type:'bar',data:{labels:weekCompare.labels,datasets:[{label:'Received',data:weekCompare.received},{label:'Dispatched',data:weekCompare.dispatched}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
+    new Chart(root.querySelector('#stats-week-compare'),{type:'bar',data:{labels:sevenDayLabels,datasets:[{label:'Received',data:sevenDayReceived},{label:'Dispatched',data:sevenDayDispatched}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
   }
   root.querySelector('#stats-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#stats-refresh').addEventListener('click',()=>renderStats());
 }
