@@ -1608,8 +1608,7 @@ function scheduleRealtimeRefresh(kind) {
     if (!auth.currentUser || !membership) return;
     if (view === 'home') {
       startHomeStatusListener();
-      if (membership?.role === 'transaction_manager') renderTransactionManagerHomeReport();
-      return;
+        return;
     }
     if (view === 'dispatch' || view === 'receive') {
       // Do not destroy typed quantity/note/department fields. Update the
@@ -2095,62 +2094,6 @@ function buildTransactionManagerDailyCsvFile(day, rows, items, activity='all', d
 async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`); }
 function downloadTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); const url=URL.createObjectURL(file); const a=document.createElement('a'); a.href=url; a.download=file.name; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); return 'downloaded'; }
 
-async function renderTransactionManagerHomeReport() {
-  const target = document.querySelector('#tm-home-live-report');
-  if (!target || membership?.role !== 'transaction_manager') return;
-  const dateEl = document.querySelector('#tm-home-report-date');
-  const activityEl = document.querySelector('#tm-home-report-activity');
-  const deptEl = document.querySelector('#tm-home-report-department');
-  const day = dateEl?.value || localDateKey();
-  const activity = activityEl?.value || 'all';
-  const department = deptEl?.value || 'all';
-  const reportRows = await getMovementRowsForDay(day);
-  const reportItems = await listItems();
-  const {reports, todayRows} = buildTransactionManagerDailyReport(reportRows, day, {activity,department,items:reportItems});
-  const live = day === localDateKey();
-  const departments = [...new Set(reportRows.filter(r=>(r.byRole||r.actorRole)==='inventory_manager' && r.department).map(r=>r.department))].sort((a,b)=>a.localeCompare(b));
-  if (deptEl) {
-    const current = deptEl.value || 'all';
-    deptEl.innerHTML = '<option value="all">All departments</option>' + departments.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
-    deptEl.value = departments.includes(current) ? current : 'all';
-  }
-  target.innerHTML = `
-    <div class="tm-home-report-head">
-      <div><div class="tm-live-title"><span class="tm-live-dot ${live?'active':'locked'}"></span><strong>${live?'Live daily transaction report':'Finished daily transaction report'}</strong><span class="tm-report-state ${live?'live':'locked'}">${live?'LIVE':'LOCKED'}</span></div><p>${live?'Real-time Inventory Manager stock movements for the selected day.':'Read-only record for the selected finished day.'}</p></div>
-      <div class="tm-home-report-updated">${todayRows.length ? `${todayRows.length} transaction${todayRows.length===1?'':'s'} shown` : 'No matching transactions'}</div>
-    </div>
-    <div class="tm-home-filter-row">
-      <div class="field"><label for="tm-home-report-date">Date</label><input id="tm-home-report-date" type="date" value="${escapeHtml(day)}"></div>
-      <div class="field"><label for="tm-home-report-activity">Movement</label><select id="tm-home-report-activity"><option value="all" ${activity==='all'?'selected':''}>All movements</option><option value="receive" ${activity==='receive'?'selected':''}>Received</option><option value="dispatch" ${activity==='dispatch'?'selected':''}>Dispatched</option></select></div>
-      <div class="field"><label for="tm-home-report-department">Department</label><select id="tm-home-report-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d)}" ${department===d?'selected':''}>${escapeHtml(d)}</option>`).join('')}</select></div>
-      <div class="tm-csv-actions"><button type="button" class="small-action csv-btn tm-download-csv" id="tm-home-report-download">📥 Download CSV</button><button type="button" class="small-action csv-btn tm-share-csv" id="tm-home-report-csv">📤 Share CSV</button><button type="button" class="small-action" id="tm-home-report-today">Today</button></div>
-      <button type="button" class="small-action" id="tm-home-report-today">Today</button>
-    </div>
-    <div class="tm-home-summary tm-home-summary-compact">
-      <div><span>Transactions</span><strong>${todayRows.length}</strong><small>Matching Inventory Manager entries</small></div>
-      <div><span>Goods moved</span><strong>${new Set(todayRows.map(r=>r.itemId)).size}</strong><small>Different items</small></div>
-    </div>
-    <div class="tm-balance-note">Opening and closing are calculated from the complete stock ledger. Received/dispatched columns show Inventory Manager activity only. Filters affect the transaction summary/feed, not the true stock balance.</div>
-    ${reports.some(x=>x.hasNegativeOpening||x.hasNegativeClosing)?`<div class="error-box">⚠️ Historical ledger inconsistency detected. A negative opening/closing balance means older saved movements do not reconcile. New dispatches are protected from making current stock negative.</div>`:''}
-    <div class="tm-home-report-table-wrap"><table class="tm-live-table"><thead><tr><th>Good</th><th>Opening</th><th>Received by IM</th><th>Dispatched by IM</th><th>True closing</th></tr></thead><tbody>${reports.map(x=>`<tr class="${x.hasNegativeOpening||x.hasNegativeClosing?'tm-ledger-warning':''}"><td><strong>${escapeHtml(x.itemName)}</strong><small>${escapeHtml(x.unit)}</small></td><td>${formatQty(x.opening)} ${escapeHtml(x.unit)}</td><td class="tm-in">+${formatQty(x.received)} ${escapeHtml(x.unit)}</td><td class="tm-out">−${formatQty(x.dispatched)} ${escapeHtml(x.unit)}</td><td><strong>${formatQty(x.closing)} ${escapeHtml(x.unit)}</strong>${x.hasNegativeOpening||x.hasNegativeClosing?'<small>Check older history</small>':''}</td></tr>`).join('') || `<tr><td colspan="5"><div class="empty-team"><strong>No stock ledger data for this day.</strong><span>Choose another date.</span></div></td></tr>`}</tbody></table></div>
-    <div class="tm-home-feed">${todayRows.slice().sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0)).slice(0,12).map(r=>`<div class="tm-feed-row"><span class="tm-feed-type ${r.type==='receive'?'in':'out'}">${r.type==='receive'?'IN':'OUT'}</span><div><strong>${escapeHtml(r.itemName)} <span class="tm-origin-pill ${transactionOriginShort(r).toLowerCase()}">${transactionOriginShort(r)}</span></strong><span>${r.type==='receive'?'+':'−'}${formatQty(r.quantity)} ${escapeHtml(r.unit)}${r.department?` · ${escapeHtml(r.department)}`:''}</span></div><small>${escapeHtml(formatDate(r.createdAt))}${r.requestId&&r.requestedByEmail?` · Requested by ${escapeHtml(personRef(r.requestedByEmail,r.requestedByRole||'stock_requester',r.requestedByName||''))}`:''}${r.editedAt?' · EDITED':''}${r.deleted?' · DELETED':''}</small></div>`).join('') || '<div class="empty-team">No transaction feed for this selection.</div>'}</div>`;
-  target.querySelector('#tm-home-report-date')?.addEventListener('change', renderTransactionManagerHomeReport);
-  target.querySelector('#tm-home-report-activity')?.addEventListener('change', renderTransactionManagerHomeReport);
-  target.querySelector('#tm-home-report-department')?.addEventListener('change', renderTransactionManagerHomeReport);
-  target.querySelector('#tm-home-report-download')?.addEventListener('click',async()=>{
-    const b=target.querySelector('#tm-home-report-download'); if(!b)return; b.disabled=true; b.textContent='Preparing…';
-    try{ const selectedDay=target.querySelector('#tm-home-report-date')?.value||localDateKey(); const selectedActivity=target.querySelector('#tm-home-report-activity')?.value||'all'; const selectedDepartment=target.querySelector('#tm-home-report-department')?.value||'all'; const liveRows=await getMovementRowsForDay(selectedDay); const liveItems=await listItems(); downloadTransactionManagerDailyCsv(selectedDay,liveRows,liveItems,selectedActivity,selectedDepartment); showTemporaryMessage('Transaction Manager CSV downloaded.','success'); }
-    catch(err){showTemporaryMessage(friendlyError(err),'error');} finally{b.disabled=false;b.textContent='📥 Download CSV';}
-  });
-  target.querySelector('#tm-home-report-csv')?.addEventListener('click',async()=>{
-    const b=target.querySelector('#tm-home-report-csv'); if(!b)return; b.disabled=true; b.textContent='Preparing…';
-    try{ const selectedDay=target.querySelector('#tm-home-report-date')?.value||localDateKey(); const selectedActivity=target.querySelector('#tm-home-report-activity')?.value||'all'; const selectedDepartment=target.querySelector('#tm-home-report-department')?.value||'all'; const liveRows=await getMovementRowsForDay(selectedDay); const liveItems=await listItems(); await shareTransactionManagerDailyCsv(selectedDay,liveRows,liveItems,selectedActivity,selectedDepartment); showTemporaryMessage('Transaction Manager CSV ready to share.','success'); }
-    catch(err){if(err?.name!=='AbortError')showTemporaryMessage(friendlyError(err),'error');} finally{b.disabled=false;b.textContent='📤 Share CSV';}
-  });
-  target.querySelector('#tm-home-report-today')?.addEventListener('click',()=>{ const d=target.querySelector('#tm-home-report-date'); if(d)d.value=localDateKey(); renderTransactionManagerHomeReport(); });
-  target.querySelectorAll('[data-tm-revision]').forEach(btn=>btn.addEventListener('click',async()=>{const [itemId,movementId]=btn.dataset.tmRevision.split(':');btn.disabled=true;try{let revisions=[];let revisionError='';try{revisions=await listMovementRevisions(itemId,movementId);}catch(err){revisionError=friendlyError(err);}const snap=await getDoc(doc(db,'companies',currentCompanyId(),'items',itemId,'movements',movementId));openRevisionViewer(revisions,snap.exists()?{id:movementId,...snap.data(),revisionReadError:revisionError}:null);if(revisionError)showTemporaryMessage(revisionError,'error');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{btn.disabled=false;}}));
-}
-
 function renderHome(membership) {
   if (!pinUnlocked()) { showPinGate(); return; }
   const user = auth.currentUser;
@@ -2188,14 +2131,12 @@ function renderHome(membership) {
       </div>
       <section class="hero"><p class="eyebrow">Company workspace</p><h1>Welcome, ${firstName}! 👋</h1><p>You are successfully logged in. This is your ${companyName} inventory workspace.</p><div class="company-meta"><span class="badge">🏢 ${companyName}</span><span class="badge role">${isAdmin ? '👑 Admin' : '👤 ' + escapeHtml(roleLabel(role))}</span><span class="badge">● Active</span></div></section>
       <div class="section-title">Quick access</div><div class="quick-grid">${quickItems.map(([icon,title,desc,action])=>`<button class="quick-card ${action==='requests'?'request-quick-card':''} ${action==='stock'?'stock-quick-card':''}" data-action="${action}" type="button"><div class="quick-icon">${icon}</div><strong>${title}${action==='stock'?'<span class="home-status-badge" id="stock-alert-badge" hidden>0</span>':''}${action==='requests'?'<span class="request-badge" id="request-badge" hidden>0</span>':''}</strong><span>${desc}</span></button>`).join('')}</div>
-      ${role==='transaction_manager'?`<section class="admin-card tm-home-report-card" id="tm-home-report-card"><div id="tm-home-live-report"></div></section>`:''}
     </div>`;
   const accountToggle=root.querySelector('#account-toggle'), accountMenu=root.querySelector('#account-menu');
   if(accountToggle&&accountMenu) accountToggle.addEventListener('click',()=>{accountMenu.hidden=!accountMenu.hidden;});
   root.querySelector('#menu-signout')?.addEventListener('click',()=>{clearEmployeeCodeVerification();signOut();});
   root.querySelector('#enable-alerts')?.addEventListener('click',async()=>{try{await enableLowStockNotifications();}catch(err){showTemporaryMessage(friendlyError(err),'error');}});
   startHomeStatusListener();
-  if (role === 'transaction_manager') renderTransactionManagerHomeReport();
   root.querySelector('#pin-settings-btn')?.addEventListener('click',renderPinSettings);
   root.querySelector('#biometric-settings-btn')?.addEventListener('click',async()=>{await renderBiometricSettings();renderHome(membership);});
 
@@ -2777,7 +2718,7 @@ async function renderHistory(forcedRole=null){
     <section class="feature-header"><p class="eyebrow">Daily log book</p><h1>${adminMenuOnly?'History':'History · '+escapeHtml(roleLabel(selectedRole))}</h1><p>${adminMenuOnly?'Choose one history section. The selected section opens as its own clean workspace. Admin remains read-only.':selectedRole==='stock_requester'?'This workspace shows stock requests and the Inventory Manager fulfilments for your requests.':selectedRole==='inventory_manager'?'This workspace shows receiving, direct dispatch and dispatches made to fulfill stock requests.':selectedRole==='transaction_manager'?'This workspace shows the Inventory Manager live and finished daily transaction report day by day.':'This workspace shows Stock Requisitioner request activity and dispatched fulfilments.'}</p></section>
     ${adminMenuOnly?`<section class="history-admin-menu" id="history-admin-menu"><button class="history-account-card" data-history-role="inventory_manager" type="button"><span>📦</span><strong>Inventory Manager</strong><small>Receiving, dispatch & request fulfilment</small></button><button class="history-account-card" data-history-role="stock_requester" type="button"><span>📝</span><strong>Stock Requisitioner</strong><small>Requests, approvals & dispatched fulfilments</small></button><button class="history-account-card" data-history-role="transaction_manager" type="button"><span>🧾</span><strong>Transaction Manager</strong><small>Transaction control & daily statements</small></button></section>`:`<section class="history-workspace" id="history-workspace">
       ${isAdmin?`<div class="history-workspace-bar"><button type="button" class="back-btn" id="history-menu-back">‹ History</button><strong id="history-workspace-title">${escapeHtml(roleLabel(selectedRole))} History</strong></div>`:''}
-      <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div>${isAdmin||role==='inventory_manager'?`<button class="small-action csv-btn" id="share-day-csv" type="button">📊 Share day CSV</button>`:''}<button class="small-action" id="history-today" type="button">Today</button></section>
+      <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div>${isAdmin||role==='inventory_manager'?`<button class="small-action csv-btn" id="share-day-csv" type="button">📊 Share day CSV</button>`:''}${selectedRole==='transaction_manager'?`<div class="tm-history-csv-actions"><button class="small-action csv-btn tm-download-csv" id="tm-history-download-csv" type="button">📥 Download CSV</button><button class="small-action csv-btn tm-share-csv" id="tm-history-share-csv" type="button">📤 Share CSV</button></div>`:''}<button class="small-action" id="history-today" type="button">Today</button></section>
       ${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${selectedRole==='transaction_manager'?`<section class="admin-card tm-live-panel" id="history-live-panel"><div id="tm-live-report"></div></section>`:`<section class="admin-card" id="history-daily-panel"><div id="daily-statement" class="daily-statement" hidden></div><div id="history-list" class="history-list"></div></section>`}
     </section>`}</div>`;
 
@@ -2840,6 +2781,8 @@ async function renderHistory(forcedRole=null){
   root.querySelector('#history-menu-back')?.addEventListener('click',()=>renderHistory());
   root.querySelector('#history-refresh').addEventListener('click',()=>renderHistory(selectedRole));
   root.querySelector('#share-day-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#share-day-csv');b.disabled=true;b.textContent='Preparing CSV…';try{const mode=await shareDailyHistoryCsv(root.querySelector('#history-day').value, rows);showTemporaryMessage(mode==='shared'?'Daily CSV ready to share.':'Daily CSV downloaded.','success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📊 Share day CSV';}});
+  root.querySelector('#tm-history-download-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#tm-history-download-csv');b.disabled=true;b.textContent='Preparing…';try{const selectedDay=root.querySelector('#history-day')?.value||today;const selectedActivity=root.querySelector('#history-type')?.value||'all';const selectedDepartment=root.querySelector('#history-department')?.value||'all';const activity=selectedActivity==='received'?'receive':selectedActivity==='dispatched'?'dispatch':'all';const items=await listItems();downloadTransactionManagerDailyCsv(selectedDay,rows,items,activity,selectedDepartment);showTemporaryMessage('Transaction Manager CSV downloaded.','success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📥 Download CSV';}});
+  root.querySelector('#tm-history-share-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#tm-history-share-csv');b.disabled=true;b.textContent='Preparing…';try{const selectedDay=root.querySelector('#history-day')?.value||today;const selectedActivity=root.querySelector('#history-type')?.value||'all';const selectedDepartment=root.querySelector('#history-department')?.value||'all';const activity=selectedActivity==='received'?'receive':selectedActivity==='dispatched'?'dispatch':'all';const items=await listItems();const mode=await shareTransactionManagerDailyCsv(selectedDay,rows,items,activity,selectedDepartment);showTemporaryMessage(mode==='shared'?'Transaction Manager CSV ready to share.':'Transaction Manager CSV downloaded.','success');}catch(err){if(err?.name!=='AbortError')showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📤 Share CSV';}});
   if(selectedRole) refreshList();
 }
 
