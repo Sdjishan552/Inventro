@@ -1719,3 +1719,38 @@ input[type="date"]::-webkit-calendar-picker-indicator{opacity:.72;cursor:pointer
 .tm-share-csv{border-color:#bfe8cb!important;background:#f0fbf3!important;color:#18743a!important}
 @media(max-width:650px){.tm-history-csv-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.tm-history-csv-actions .small-action{width:100%}}
 @media(max-width:430px){.tm-history-csv-actions{grid-template-columns:1fr}.tm-history-csv-actions .small-action{width:100%}}
+
+/* v80 — Android/mobile horizontal-overflow fix
+   Keep landing and Stats pages inside the viewport. */
+html, body, #app { max-width:100%; overflow-x:hidden; }
+.dashboard, .feature-page, .feature-page > *, .chart-grid, .chart-card, .stat-grid, .stat-card { min-width:0; }
+.chart-card { overflow:hidden; }
+.stats-page .chart-grid { width:100%; }
+.stats-page .chart-card canvas { display:block; max-width:100%; }
+
+@media (max-width:620px){
+  .dashboard { width:100%; max-width:100%; padding-left:14px; padding-right:14px; }
+  .stats-page .feature-header h1 { overflow-wrap:anywhere; }
+  .stats-page .stat-grid { grid-template-columns:repeat(2,minmax(0,1fr)); width:100%; }
+  .stats-page .stat-card { width:100%; overflow:hidden; }
+  .stats-page .chart-grid { grid-template-columns:1fr; width:100%; }
+  .stats-page .chart-card { width:100%; min-width:0; }
+
+  .landing-page { width:100%; max-width:100vw; overflow-x:hidden; overflow-y:auto; }
+  .landing-shell { width:calc(100% - 28px); max-width:520px; min-width:0; }
+  .landing-hero, .landing-copy, .landing-preview, .landing-actions,
+  .landing-features { min-width:0; max-width:100%; }
+  .landing-copy h1, .landing-copy > p { overflow-wrap:anywhere; }
+  .landing-preview { width:100%; overflow:visible; }
+  .preview-window { max-width:100%; min-width:0; }
+}
+
+@media (max-width:430px){
+  .stats-page .stat-grid { grid-template-columns:1fr; }
+  .stats-page .stat-card { min-width:0; }
+  .landing-shell { width:calc(100% - 24px); }
+  .landing-copy h1 { font-size:34px; }
+  .preview-window { width:100%; }
+  .preview-float-one { right:0; }
+  .preview-float-two { left:0; }
+}
