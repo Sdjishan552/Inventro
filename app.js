@@ -2081,6 +2081,45 @@ function getRealtimeMovementRows() {
   return rows;
 }
 
+async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') {
+  if (membership?.role !== 'transaction_manager') throw new Error('Only the Transaction Manager can share the daily transaction CSV.');
+  const report = buildTransactionManagerDailyReport(rows, day, {activity, department, items});
+  const selected = report.todayRows.slice().sort((a,b)=>{
+    const t=(a.createdAt?.toMillis?.()||0)-(b.createdAt?.toMillis?.()||0);
+    if(t) return t;
+    return String(a.itemName||'').localeCompare(String(b.itemName||''),undefined,{sensitivity:'base'});
+  });
+  if(!selected.length) throw new Error(`No matching Inventory Manager transactions were recorded on ${day}.`);
+  const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;
+  const movementFilter=activity==='receive'?'Received':activity==='dispatch'?'Dispatched':'All movements';
+  const departmentFilter=department==='all'?'All departments':department;
+  const lines=[
+    ['Inventro Transaction Manager Daily CSV'],
+    ['Date',day],
+    ['Movement filter',movementFilter],
+    ['Department filter',departmentFilter],
+    ['Generated',formatDate(new Date())],
+    [],
+    ['Item Name','Movement','Department','Quantity','Unit','Time','Person ID','Role','Requested By','Request ID','Note','Status'],
+    ...selected.map(r=>[
+      r.itemName,
+      movementLabel(r.type),
+      r.department||'',
+      r.quantity,
+      r.unit||'',
+      formatDate(r.createdAt),
+      r.byEmail?shortPersonId(r.byEmail,r.byRole||r.actorRole||''):'',
+      roleLabel(r.byRole||r.actorRole||''),
+      r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',
+      r.requestId||'',
+      r.note||'',
+      r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL'
+    ])
+  ].map(row=>row.map(esc).join(','));
+  const file=new File([lines.join('\r\n')],`Inventro-TM-Daily-${day}.csv`,{type:'text/csv;charset=utf-8'});
+  return shareFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`);
+}
+
 async function renderTransactionManagerHomeReport() {
   const target = document.querySelector('#tm-home-live-report');
   if (!target || membership?.role !== 'transaction_manager') return;
@@ -2109,6 +2148,7 @@ async function renderTransactionManagerHomeReport() {
       <div class="field"><label for="tm-home-report-date">Date</label><input id="tm-home-report-date" type="date" value="${escapeHtml(day)}"></div>
       <div class="field"><label for="tm-home-report-activity">Movement</label><select id="tm-home-report-activity"><option value="all" ${activity==='all'?'selected':''}>All movements</option><option value="receive" ${activity==='receive'?'selected':''}>Received</option><option value="dispatch" ${activity==='dispatch'?'selected':''}>Dispatched</option></select></div>
       <div class="field"><label for="tm-home-report-department">Department</label><select id="tm-home-report-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d)}" ${department===d?'selected':''}>${escapeHtml(d)}</option>`).join('')}</select></div>
+      <button type="button" class="small-action csv-btn" id="tm-home-report-csv">📊 Share CSV</button>
       <button type="button" class="small-action" id="tm-home-report-today">Today</button>
     </div>
     <div class="tm-home-summary tm-home-summary-compact">
@@ -2122,6 +2162,20 @@ async function renderTransactionManagerHomeReport() {
   target.querySelector('#tm-home-report-date')?.addEventListener('change', renderTransactionManagerHomeReport);
   target.querySelector('#tm-home-report-activity')?.addEventListener('change', renderTransactionManagerHomeReport);
   target.querySelector('#tm-home-report-department')?.addEventListener('change', renderTransactionManagerHomeReport);
+  target.querySelector('#tm-home-report-csv')?.addEventListener('click',async()=>{
+    const b=target.querySelector('#tm-home-report-csv'); if(!b)return;
+    b.disabled=true; b.textContent='Preparing CSV…';
+    try{
+      const selectedDay=target.querySelector('#tm-home-report-date')?.value||localDateKey();
+      const selectedActivity=target.querySelector('#tm-home-report-activity')?.value||'all';
+      const selectedDepartment=target.querySelector('#tm-home-report-department')?.value||'all';
+      const liveRows=await getMovementRowsForDay(selectedDay);
+      const liveItems=await listItems();
+      const mode=await shareTransactionManagerDailyCsv(selectedDay,liveRows,liveItems,selectedActivity,selectedDepartment);
+      showTemporaryMessage(mode==='shared'?'Transaction Manager CSV ready to share.':'Transaction Manager CSV downloaded.','success');
+    }catch(err){showTemporaryMessage(friendlyError(err),'error');}
+    finally{b.disabled=false;b.textContent='📊 Share CSV';}
+  });
   target.querySelector('#tm-home-report-today')?.addEventListener('click',()=>{ const d=target.querySelector('#tm-home-report-date'); if(d)d.value=localDateKey(); renderTransactionManagerHomeReport(); });
   target.querySelectorAll('[data-tm-revision]').forEach(btn=>btn.addEventListener('click',async()=>{const [itemId,movementId]=btn.dataset.tmRevision.split(':');btn.disabled=true;try{let revisions=[];let revisionError='';try{revisions=await listMovementRevisions(itemId,movementId);}catch(err){revisionError=friendlyError(err);}const snap=await getDoc(doc(db,'companies',currentCompanyId(),'items',itemId,'movements',movementId));openRevisionViewer(revisions,snap.exists()?{id:movementId,...snap.data(),revisionReadError:revisionError}:null);if(revisionError)showTemporaryMessage(revisionError,'error');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{btn.disabled=false;}}));
 }
