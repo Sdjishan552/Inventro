@@ -2225,24 +2225,20 @@ function currentStockRows(items) {
 }
 
 async function shareFile(file, text) {
-  // Prefer the native share sheet on supported phones. If the browser rejects
-  // file sharing (or does not support it), fall back to a direct download so
-  // Inventory Manager can always obtain the report.
-  if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
-    try {
-      await navigator.share({ title: 'Inventro Stock Report', text, files: [file] });
-      return 'shared';
-    } catch (err) {
-      if (err?.name === 'AbortError') throw err;
-      console.warn('Native file sharing unavailable; using download fallback.', err);
-    }
+  // The Share button must open the native Android/Web Share sheet.
+  // Do NOT silently fall back to downloading: that makes a Share tap behave
+  // like the Download button. Some Android browsers report canShare(false)
+  // for CSV files even though navigator.share can still hand the File to the
+  // native share sheet, so try the file share directly.
+  if (!navigator.share) throw new Error('File sharing is not supported by this browser. Please use Chrome on Android.');
+  try {
+    await navigator.share({ title: 'Inventro Stock Report', text, files: [file] });
+    return 'shared';
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    console.error('Native file sharing failed.', err);
+    throw new Error('Could not open the Android share sheet. Please try again or use Download CSV.');
   }
-  const url = URL.createObjectURL(file);
-  const a = document.createElement('a');
-  a.href = url; a.download = file.name; a.rel = 'noopener';
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1500);
-  return 'downloaded';
 }
 
 function itemHasOutstandingOrder(item) {
