@@ -126,17 +126,17 @@ async function verifyEmployeeCode(code) {
   if (employee.status === 'invited') {
     await updateDoc(employeeSnap.ref, { status: 'active', uid: user.uid, joinedAt: serverTimestamp(), displayName: user.displayName || '' });
   }
-  sessionStorage.setItem('inventroEmployeeVerified', companyId);
+  localStorage.setItem('inventroEmployeeVerified', companyId);
   localStorage.setItem(`inventroCompanyCodeVersion:${companyId}`, String((await getDoc(doc(db,'companies',companyId))).data()?.companyCodeVersion || 'legacy'));
   return true;
 }
 
 function isEmployeeCodeVerified(companyId) {
-  return sessionStorage.getItem('inventroEmployeeVerified') === companyId;
+  return localStorage.getItem('inventroEmployeeVerified') === companyId;
 }
 
 function clearEmployeeCodeVerification() {
-  sessionStorage.removeItem('inventroEmployeeVerified');
+  localStorage.removeItem('inventroEmployeeVerified');
 }
 
 async function joinCompany(code) {
