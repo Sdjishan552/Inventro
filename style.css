@@ -1754,3 +1754,24 @@ html, body, #app { max-width:100%; overflow-x:hidden; }
   .preview-float-one { right:0; }
   .preview-float-two { left:0; }
 }
+
+/* v84 — Clean Stock Requests workspace: notifications and personal requests in tabs */
+.stock-request-workspace{padding:0;overflow:hidden}
+.stock-request-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--surface-soft);padding:7px 10px 0}
+.stock-request-tab{position:relative;border:0;background:transparent;color:var(--text-soft);padding:11px 14px;font-size:12px;font-weight:800;cursor:pointer;border-radius:9px 9px 0 0;white-space:nowrap}
+.stock-request-tab.active{background:var(--surface);color:var(--primary);box-shadow:0 -1px 0 var(--border),1px 0 0 var(--border),-1px 0 0 var(--border)}
+.stock-request-tab .notification-count{margin-left:5px}
+.stock-request-tab-panel{padding:14px}
+.stock-request-tab-panel[hidden]{display:none!important}
+.stock-request-panel-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.stock-request-panel-head h2{margin:0;font-size:16px}
+.stock-request-panel-head p{margin:4px 0 0;color:var(--text-muted);font-size:11px}
+.request-filter-card-inner{margin-bottom:12px;padding:10px;border:1px solid var(--border);border-radius:11px;background:var(--surface-soft)}
+.stock-request-tab-panel .notification-list{margin:0}
+.stock-request-tab-panel .request-list{margin-top:0}
+@media(max-width:650px){
+  .stock-request-tabs{padding-left:6px;padding-right:6px}
+  .stock-request-tab{flex:1;padding:11px 7px;font-size:11px}
+  .stock-request-tab-panel{padding:11px}
+  .stock-request-panel-head h2{font-size:15px}
+}
