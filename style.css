@@ -1718,7 +1718,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{opacity:.72;cursor:pointer
 .tm-download-csv{border-color:#b7d2ff!important;background:#edf4ff!important;color:#1557c0!important}
 .tm-share-csv{border-color:#bfe8cb!important;background:#f0fbf3!important;color:#18743a!important}
 @media(max-width:650px){.tm-history-csv-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.tm-history-csv-actions .small-action{width:100%}}
-@media(max-width:430px){.tm-history-csv-actions{grid-template-columns:1fr}.tm-history-csv-actions .small-action{width:100%}}
+@media(max-width:430px){.tm-history-csv-actions{grid-template-columns:1fr 1fr}.tm-history-csv-actions .small-action{width:100%;padding-left:8px;padding-right:8px;font-size:12px}}
 
 /* v80 — Android/mobile horizontal-overflow fix
    Keep landing and Stats pages inside the viewport. */
