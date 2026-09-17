@@ -367,27 +367,65 @@ async function setPersonalPin(pin){
 // Firestore; the fingerprint is a convenience gate on top of that, same as
 // unlocking a phone's screen.
 function biometricDeviceKey(){return `inventroBiometricEnabled:${auth.currentUser?.uid||''}`;}
+function biometricCredentialKey(){return `inventroBiometricCredId:${auth.currentUser?.uid||''}`;}
 function biometricEnabledOnThisDevice(){return localStorage.getItem(biometricDeviceKey())==='1';}
+// True only when biometric is on AND we hold the specific credential id
+// needed to target the platform authenticator directly. A device enrolled
+// before this fix will have the flag but no id — treat that as off and
+// clear the stale flag, rather than repeating the broken picker flow.
+function biometricReadyOnThisDevice(){
+  if(!biometricEnabledOnThisDevice()) return false;
+  if(!localStorage.getItem(biometricCredentialKey())){ localStorage.removeItem(biometricDeviceKey()); return false; }
+  return true;
+}
+function bufferToBase64url(buf){
+  return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function base64urlToBuffer(str){
+  const pad='='.repeat((4 - str.length % 4) % 4);
+  const base64=(str+pad).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(base64);
+  const buf=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++) buf[i]=raw.charCodeAt(i);
+  return buf.buffer;
+}
 async function platformAuthAvailable(){
   try{ return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }
   catch(e){ return false; }
 }
 async function registerBiometricUnlock(){
   const user=auth.currentUser; if(!user) throw new Error('Not signed in.');
-  await navigator.credentials.create({publicKey:{
+  const cred=await navigator.credentials.create({publicKey:{
     challenge:crypto.getRandomValues(new Uint8Array(32)),
     rp:{name:'Inventro',id:location.hostname},
     user:{id:new TextEncoder().encode(user.uid),name:user.email||'inventro-user',displayName:user.displayName||user.email||'Inventro user'},
     pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
-    authenticatorSelection:{authenticatorAttachment:'platform',residentKey:'required',userVerification:'required'},
+    // residentKey 'discouraged' (not 'required') keeps this a plain device
+    // credential rather than a discoverable passkey — it never gets synced
+    // into Google Password Manager or offered in its account-picker sheet.
+    // Paired with allowCredentials below, this makes verifyWithBiometric()
+    // go straight to a silent fingerprint/face prompt every time.
+    authenticatorSelection:{authenticatorAttachment:'platform',residentKey:'discouraged',userVerification:'required'},
     timeout:60000
   }});
   localStorage.setItem(biometricDeviceKey(),'1');
+  localStorage.setItem(biometricCredentialKey(),bufferToBase64url(cred.rawId));
   // Best-effort bookkeeping only (which accounts have a device enrolled anywhere) — never used for verification.
   setDoc(doc(db,'memberships',user.uid),{biometricEnrolled:true},{merge:true}).catch(()=>{});
 }
 async function verifyWithBiometric(){
-  await navigator.credentials.get({publicKey:{challenge:crypto.getRandomValues(new Uint8Array(32)),rpId:location.hostname,userVerification:'required',timeout:60000}});
+  const credId=localStorage.getItem(biometricCredentialKey());
+  if(!credId) throw new Error('No fingerprint credential on this device.');
+  await navigator.credentials.get({publicKey:{
+    challenge:crypto.getRandomValues(new Uint8Array(32)),
+    rpId:location.hostname,
+    userVerification:'required',
+    timeout:60000,
+    // Targeting the exact credential is what skips Google's "Use saved
+    // passkey?" account-chooser sheet and goes straight to the device's
+    // own fingerprint/face prompt.
+    allowCredentials:[{type:'public-key',id:base64urlToBuffer(credId),transports:['internal']}]
+  }});
 }
 async function offerBiometricSetup(){
   if(!(isMobileDevice() && !biometricEnabledOnThisDevice() && await platformAuthAvailable())) return;
@@ -428,7 +466,7 @@ async function requirePin(action='continue'){
   // On a phone with fingerprint/face unlock already turned on for this
   // device, use that instead of asking the person to type their PIN; if it
   // fails or is cancelled, fall straight through to the normal PIN modal.
-  if(isMobileDevice() && biometricEnabledOnThisDevice() && await platformAuthAvailable()){
+  if(isMobileDevice() && biometricReadyOnThisDevice() && await platformAuthAvailable()){
     try{ await verifyWithBiometric(); touchPinSession(); armPinAutoLock(); return true; }
     catch(e){ /* fingerprint failed/cancelled — ask for the PIN below */ }
   }
@@ -447,9 +485,10 @@ async function renderPinSettings(){
   }catch(e){showTemporaryMessage(e.message,'error');}
 }
 async function renderBiometricSettings(){
-  if(biometricEnabledOnThisDevice()){
+  if(biometricReadyOnThisDevice()){
     if(window.confirm('Fingerprint unlock is ON for this device. Turn it off and use the PIN instead?')){
       localStorage.removeItem(biometricDeviceKey());
+      localStorage.removeItem(biometricCredentialKey());
       showTemporaryMessage('Fingerprint unlock turned off for this device.','success');
     }
     return;
@@ -467,7 +506,7 @@ async function renderBiometricSettings(){
 }
 function showPinGate(){
   const has=!!storedPinHash();
-  const canBiometric=has && isMobileDevice() && biometricEnabledOnThisDevice();
+  const canBiometric=has && isMobileDevice() && biometricReadyOnThisDevice();
   root.innerHTML=`<div class="screen pin-gate"><div class="pin-gate-card"><p class="brand">Inventro Security</p><div class="pin-icon-wrap">${canBiometric?'👆':'🔒'}</div><h1>${has?'Workspace locked':'Create your security PIN'}</h1><p class="subtitle">${has?(canBiometric?'Use your fingerprint to continue, or enter your PIN below.':'Enter your personal PIN to continue. The same PIN works on any device you sign into.'):'Choose your own 4–8 digit PIN. You will need it when the app opens and after 5 minutes of inactivity.'}</p>${canBiometric?'<button type="button" class="btn btn-primary" id="biometric-retry">👆 Use fingerprint</button><p class="pin-hint">Or enter your PIN instead:</p>':''}<div class="pin-form"><div class="field"><label for="inventro-pin">${has?'PIN':'New PIN'}</label><div class="pin-input-wrap"><input id="inventro-pin" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Enter PIN"><button type="button" class="pin-toggle" data-target="inventro-pin" aria-label="Show PIN">👁</button></div></div>${has?'':'<div class="field"><label for="inventro-pin-confirm">Confirm PIN</label><div class="pin-input-wrap"><input id="inventro-pin-confirm" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Re-enter PIN"><button type="button" class="pin-toggle" data-target="inventro-pin-confirm" aria-label="Show PIN">👁</button></div></div>'}<button class="btn btn-primary" id="unlock-pin">${has?'Unlock Inventro':'Create PIN & Enter'}</button></div><p class="pin-hint">Your PIN is personal and now syncs to your account, not just this device.</p></div></div>`;
   const go=async()=>{const a=root.querySelector('#inventro-pin').value;if(!/^\d{4,8}$/.test(a)){showTemporaryMessage('PIN must contain 4 to 8 digits.','error');return;}try{if(has){if(await hashPin(a)!==storedPinHash())throw new Error('Incorrect Inventro PIN.');}else{const b=root.querySelector('#inventro-pin-confirm').value;if(a!==b)throw new Error('PINs do not match.');await setPersonalPin(a);}touchPinSession();armPinAutoLock();render();}catch(e){showTemporaryMessage(e.message,'error');}};
   root.querySelectorAll('.pin-toggle').forEach(btn=>btn.addEventListener('click',()=>{const input=root.querySelector('#'+btn.dataset.target);input.type=input.type==='password'?'text':'password';btn.textContent=input.type==='password'?'👁':'🙈';btn.setAttribute('aria-label',input.type==='password'?'Show PIN':'Hide PIN');input.focus();}));
@@ -1998,7 +2037,7 @@ function renderHome(membership) {
         <div class="topbar-brand">Inventro</div>
         <div class="account-wrap">
           <button class="user-pill account-toggle" id="account-toggle" type="button"><div class="avatar">${initial}</div><div class="user-email">${email}</div><span class="account-chevron">⌄</span></button>
-          <div class="account-menu" id="account-menu" hidden><div class="account-menu-email">${email}</div><button type="button" class="menu-action" id="pin-settings-btn">🔐 Security PIN</button>${isMobileDevice()?`<button type="button" class="menu-action" id="biometric-settings-btn">👆 Fingerprint unlock ${biometricEnabledOnThisDevice()?'(on)':'(off)'}</button>`:''}<button type="button" class="menu-signout" id="menu-signout">Sign out</button></div>
+          <div class="account-menu" id="account-menu" hidden><div class="account-menu-email">${email}</div><button type="button" class="menu-action" id="pin-settings-btn">🔐 Security PIN</button>${isMobileDevice()?`<button type="button" class="menu-action" id="biometric-settings-btn">👆 Fingerprint unlock ${biometricReadyOnThisDevice()?'(on)':'(off)'}</button>`:''}<button type="button" class="menu-signout" id="menu-signout">Sign out</button></div>
         </div>
       </div>
       <section class="hero"><p class="eyebrow">Company workspace</p><h1>Welcome, ${firstName}! 👋</h1><p>You are successfully logged in. This is your ${companyName} inventory workspace.</p><div class="company-meta"><span class="badge">🏢 ${companyName}</span><span class="badge role">${isAdmin ? '👑 Admin' : '👤 ' + escapeHtml(roleLabel(role))}</span><span class="badge">● Active</span></div></section>
