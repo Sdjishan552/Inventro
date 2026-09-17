@@ -1712,11 +1712,10 @@ input[type="date"]::-webkit-calendar-picker-indicator{opacity:.72;cursor:pointer
 .tm-feed-main>strong .tm-origin-pill{font-size:9px;padding:3px 6px}
 .history-main>strong .tm-origin-pill{font-size:9px;padding:3px 6px}
 
-
-/* v78 — Transaction Manager CSV actions */
-.tm-csv-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
-.tm-csv-actions .small-action{height:42px;min-height:42px;white-space:nowrap}
+/* v79 — Transaction Manager CSV actions inside Live Daily Report */
+.tm-history-csv-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tm-history-csv-actions .small-action{height:38px;min-height:38px;white-space:nowrap}
 .tm-download-csv{border-color:#b7d2ff!important;background:#edf4ff!important;color:#1557c0!important}
 .tm-share-csv{border-color:#bfe8cb!important;background:#f0fbf3!important;color:#18743a!important}
-@media(max-width:760px){.tm-home-filter-row{grid-template-columns:1fr 1fr}.tm-csv-actions{grid-column:1/-1;justify-content:stretch}.tm-csv-actions .small-action{flex:1 1 0}}
-@media(max-width:430px){.tm-home-filter-row{grid-template-columns:1fr}.tm-home-filter-row .field:first-child{grid-column:auto}.tm-csv-actions{grid-column:auto;display:grid;grid-template-columns:1fr 1fr}.tm-csv-actions #tm-home-report-today{grid-column:1/-1}}
+@media(max-width:650px){.tm-history-csv-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.tm-history-csv-actions .small-action{width:100%}}
+@media(max-width:430px){.tm-history-csv-actions{grid-template-columns:1fr}.tm-history-csv-actions .small-action{width:100%}}
