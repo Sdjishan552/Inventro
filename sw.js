@@ -1,5 +1,5 @@
-const CACHE = 'inventro-shell-v90';
-const CORE = ['./','./index.html','./style.css?v=90','./app.js?v=90','./manifest.json'];
+const CACHE = 'inventro-shell-v100';
+const CORE = ['./','./index.html','./style.css?v=100','./app.js?v=100','./manifest.json'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting()));
