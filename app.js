@@ -334,6 +334,74 @@ const INVENTORY_UNITS = [
   'box','dozen','tray','carton','bag','can','jar','tin','bundle','set'
 ];
 
+
+// Quantity entry uses the inventory item's primary unit plus its valid smaller unit.
+// Firestore continues to store one numeric quantity in the item's primary unit.
+const UNIT_SUBUNIT = Object.freeze({
+  kg:     { unit: 'gram',  factor: 1000 },
+  ton:    { unit: 'kg',    factor: 1000 },
+  liter:  { unit: 'ml',    factor: 1000 },
+  dozen:  { unit: 'piece', factor: 12 }
+});
+
+function getSubunitMeta(unit) {
+  return UNIT_SUBUNIT[String(unit || '').toLowerCase()] || null;
+}
+
+function normalizeQuantityParts(primaryValue, subValue, unit, { allowZero = true } = {}) {
+  const pRaw = String(primaryValue ?? '').trim();
+  const sRaw = String(subValue ?? '').trim();
+  let primary = pRaw === '' ? 0 : Number(pRaw);
+  let sub = sRaw === '' ? 0 : Number(sRaw);
+  if (!Number.isFinite(primary) || !Number.isFinite(sub) || primary < 0 || sub < 0) {
+    throw new Error('Enter valid quantity values.');
+  }
+  const meta = getSubunitMeta(unit);
+  if (meta) {
+    // Carry overflow in the smaller unit into the primary unit.
+    const carried = Math.floor(sub / meta.factor);
+    primary += carried;
+    sub = sub - carried * meta.factor;
+  } else if (sRaw !== '' && sub !== 0) {
+    // Units without a defined smaller unit accept only the primary quantity.
+    throw new Error(`This item uses ${unit}. Enter the quantity only in ${unit}.`);
+  }
+  const total = primary + (meta ? sub / meta.factor : 0);
+  if (!allowZero && total <= 0) throw new Error('Enter a quantity greater than 0.');
+  return Number(total.toFixed(6));
+}
+
+function formatQuantityParts(value, unit) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '';
+  const meta = getSubunitMeta(unit);
+  if (!meta) return `${formatQty(n)} ${unit || ''}`.trim();
+  let primary = Math.floor(n + 1e-9);
+  let sub = Math.round((n - primary) * meta.factor);
+  if (sub >= meta.factor) { primary += 1; sub = 0; }
+  if (sub === 0) return `${formatQty(primary)} ${unit}`;
+  if (primary === 0) return `${formatQty(sub)} ${meta.unit}`;
+  return `${formatQty(primary)} ${unit} ${formatQty(sub)} ${meta.unit}`;
+}
+
+function quantityFieldsHtml(prefix, unit, options = {}) {
+  const meta = getSubunitMeta(unit);
+  const disabled = options.disabled ? 'disabled' : '';
+  const primaryValue = options.primary == null ? '' : String(options.primary);
+  const subValue = options.sub == null ? '' : String(options.sub);
+  if (!unit) return `<div class="quantity-entry-empty">Select an item</div>`;
+  if (!meta) {
+    return `<div class="quantity-parts quantity-single"><div class="quantity-part"><input id="${prefix}-qty-primary" class="quantity-primary" type="number" min="0" step="0.01" inputmode="decimal" placeholder="" value="${escapeHtml(primaryValue)}" ${disabled}><span>${escapeHtml(unit)}</span></div></div>`;
+  }
+  return `<div class="quantity-parts"><div class="quantity-part"><input id="${prefix}-qty-primary" class="quantity-primary" type="number" min="0" step="0.01" inputmode="decimal" placeholder="" value="${escapeHtml(primaryValue)}" ${disabled}><span>${escapeHtml(unit)}</span></div><span class="quantity-plus">+</span><div class="quantity-part"><input id="${prefix}-qty-sub" class="quantity-secondary" type="number" min="0" step="1" inputmode="numeric" placeholder="" value="${escapeHtml(subValue)}" ${disabled}><span>${escapeHtml(meta.unit)}</span></div></div>`;
+}
+
+function readQuantityFields(prefix, unit, { allowZero = false } = {}) {
+  const primary = document.querySelector(`#${prefix}-qty-primary`)?.value ?? '';
+  const sub = document.querySelector(`#${prefix}-qty-sub`)?.value ?? '';
+  return normalizeQuantityParts(primary, sub, unit, { allowZero });
+}
+
 function formatDate(value) {
   if (!value) return 'Not updated yet';
   const d = typeof value?.toDate === 'function' ? value.toDate() : new Date(value);
@@ -732,7 +800,7 @@ async function changeStock(itemId, amount, type, note='', options={}) {
     if (!snap.exists()) throw new Error('That item no longer exists. Refresh the stock list.');
     const item = snap.data(), current = Number(item.quantity || 0);
     const next = type === 'dispatch' ? current - n : current + n;
-    if (type === 'dispatch' && n > current) throw new Error(`Not enough ${item.name} in stock. Available: ${current} ${item.unit}.`);
+    if (type === 'dispatch' && n > current) throw new Error(`Not enough ${item.name} in stock. Available: ${formatQuantityParts(current, item.unit)}.`);
     const update = {quantity:next,updatedAt:serverTimestamp(),updatedBy:user.uid,updatedByEmail:user.email?.toLowerCase() || ''};
     if (fulfillOrder && item.procurementStatus === 'ordered') {
       update.procurementStatus = 'fulfilled';
@@ -1366,10 +1434,14 @@ root.addEventListener('click', (event) => {
   if (action === 'requests') { navigate('requests'); return; }
   if (action === 'stats') { navigate('stats'); return; }
   if (action === 'history') { navigate('history'); return; }
+  if (action === 'tm-order-list') {
+    if (membership?.role !== 'transaction_manager') return showTemporaryMessage('Only the Transaction Manager can make an order list.','error');
+    navigate('tm-order-list');
+    return;
+  }
   if (action === 'tm-live-report') {
     if (membership?.role !== 'transaction_manager') return showTemporaryMessage('Only the Transaction Manager can open the live daily report.','error');
-    historyOpenLiveRequested = true;
-    navigate('history');
+    navigate('tm-live-report');
     return;
   }
   showTemporaryMessage(`${card.querySelector('strong')?.textContent || 'This section'} is coming next.`);
@@ -1396,16 +1468,16 @@ function renderWelcome({ onCreate, onJoin }) {
           <div class="landing-copy">
             <div class="landing-kicker"><span>✦</span> Smart stock management</div>
             <h1>Everything your kitchen needs, <em>in one place.</em></h1>
-            <p>Track stock, receive supplies, dispatch ingredients, manage requests and keep your team in sync — without the paperwork.</p>
+            
             <div class="landing-actions">
               <button class="landing-action landing-action-primary" id="create-btn">
                 <span class="landing-action-icon">＋</span>
-                <span><strong>Create a company</strong><small>Start your inventory workspace</small></span>
+                <span><strong>Create a company</strong></span>
                 <b>→</b>
               </button>
               <button class="landing-action landing-action-secondary" id="join-btn">
                 <span class="landing-action-icon">↗</span>
-                <span><strong>Join a company</strong><small>Use the code from your admin</small></span>
+                <span><strong>Join a company</strong></span>
                 <b>→</b>
               </button>
             </div>
@@ -1438,9 +1510,9 @@ function renderWelcome({ onCreate, onJoin }) {
         </div>
 
         <div class="landing-features">
-          <div><span>📦</span><strong>One inventory</strong><small>Receive, dispatch & track stock</small></div>
-          <div><span>👥</span><strong>Built for teams</strong><small>Admin & role-based workflows</small></div>
-          <div><span>📊</span><strong>Clear insights</strong><small>History, requests & statistics</small></div>
+          <div><span>📦</span><strong>One inventory</strong></div>
+          <div><span>👥</span><strong>Built for teams</strong></div>
+          <div><span>📊</span><strong>Clear insights</strong></div>
         </div>
         <p class="landing-footer">Designed for busy kitchens · Simple enough for everyone</p>
       </section>
@@ -1458,9 +1530,7 @@ function renderCreateCompany({ onBack, onDone }) {
         <div class="back-row"><button class="back-btn" id="back-btn">‹ Back</button></div>
         <p class="brand">Create a company</p>
         <h1>${user ? 'Name your company' : 'Sign in to continue'}</h1>
-        <p class="subtitle">${user
-          ? "This becomes the workspace your team joins. You'll get a 6-digit code afterward to share with them."
-          : "You'll create this company under your Google account. Whichever Gmail you choose here becomes the sole admin."}</p>
+        
         ${error ? `<div class="error-box">${error}</div>` : ''}
         ${user ? `
           <div class="field">
@@ -1494,7 +1564,7 @@ function renderCompanyCreated({ code, onContinue }) {
     <div class="screen">
       <p class="brand">You're set up</p>
       <h1>Save this code</h1>
-      <p class="subtitle">Share it only with people who should be able to join. You'll add their emails from the admin tab before they can use it.</p>
+      
       <div class="code-display"><div class="code">${code}</div><div class="caption">Your company's join code</div></div>
       <button class="btn btn-primary" id="continue-btn">Enter workspace</button>
     </div>`;
@@ -1510,9 +1580,7 @@ function renderJoinCompany({ onBack, onDone }) {
         <div class="back-row"><button class="back-btn" id="back-btn">‹ Back</button></div>
         <p class="brand">Join a company</p>
         <h1>${user ? 'Enter your code' : 'Sign in to continue'}</h1>
-        <p class="subtitle">${user
-          ? `Signed in as ${user.email}. Enter the 6-digit code your admin gave you.`
-          : 'Choose the Google account your admin added to the company. It has to match exactly.'}</p>
+        
         ${error ? `<div class="error-box">${error}</div>` : ''}
         ${user ? `
           <div class="field">
@@ -1626,7 +1694,7 @@ let homeStatusUnsubscribe = null;
 // Global real-time synchronization.  These listeners stay alive for the whole
 // signed-in company session so pages never depend on a manual Refresh button.
 let realtimeUnsubscribers = [];
-const MOVEMENT_LIVE_DAYS = 2;
+const MOVEMENT_LIVE_DAYS = 3;
 let realtimeMovementUnsubs = new Map();
 let realtimeMovementCache = new Map();
 let fullMovementCache = new Map();
@@ -1676,7 +1744,7 @@ function scheduleRealtimeRefresh(kind) {
   // Stock and Requests already have focused listeners that update their visible
   // cards/lists in place. For read-only/log pages, redraw after Firestore settles.
   if (['stock','requests'].includes(view)) return;
-  if (!['home','dispatch','receive','history','logbook','stats','admin'].includes(view)) return;
+  if (!['home','dispatch','receive','history','logbook','stats','admin','tm-order-list','tm-live-report'].includes(view)) return;
   if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
   realtimeRefreshTimer = setTimeout(() => {
     realtimeRefreshTimer = null;
@@ -1692,7 +1760,13 @@ function scheduleRealtimeRefresh(kind) {
       updateMovementLiveContext();
       return;
     }
-    if (view === 'history' || view === 'logbook') renderHistory();
+    if (view === 'history' || view === 'logbook') {
+      // Admin's Transaction Manager workspaces are date-driven and perform
+      // their own on-call reads/refreshes. Do not tear down the selected
+      // workspace when the background movement cache changes.
+      if (view === 'history' && membership?.role === 'admin' && history.state?.historyRole === 'transaction_manager' && document.querySelector('#tm-history-submenu')) return;
+      renderHistory();
+    }
     else if (view === 'stats') renderStats();
     else if (view === 'admin') renderAdmin();
   }, 120);
@@ -1783,6 +1857,41 @@ async function getMovementRowsForDay(day){
   const rows=[];
   full.forEach((movementRows,itemId)=>(movementRows||[]).forEach(r=>rows.push({itemId,...r})));
   return rows;
+}
+
+// Exact date read used by Admin's Transaction Manager report.
+// It intentionally bypasses the small realtime movement cache so the Admin
+// report always has the authoritative records for the date requested.
+async function getMovementRowsForDayOnCall(day){
+  const companyId=currentCompanyId();
+  if(!companyId) return [];
+  const items=await listItems(true);
+  const start=new Date(`${day}T00:00:00`);
+  const end=new Date(start);
+  end.setDate(end.getDate()+1);
+  const rows=[];
+  await Promise.all(items.map(async item=>{
+    const movementRef=query(
+      collection(db,'companies',companyId,'items',item.id,'movements'),
+      where('createdAt','>=',start),
+      where('createdAt','<',end)
+    );
+    const snap=await getDocs(movementRef);
+    snap.docs.forEach(d=>{
+      const data=d.data()||{};
+      const byEmail=String(data.byEmail||'').toLowerCase();
+      rows.push({
+        id:d.id,
+        itemId:item.id,
+        ...data,
+        itemName:data.itemName||item.name||'',
+        unit:data.unit||item.unit||'',
+        actorRole:normalizedRole(data.byRole||data.actorRole||realtimeEmployeeRoleMap.get(byEmail)||''),
+        actorName:data.byName||data.actorName||employeeDirectory.get(byEmail)?.name||''
+      });
+    });
+  }));
+  return rows.sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0));
 }
 
 function syncRequestEventListeners(companyId, requestDocs) {
@@ -2231,8 +2340,7 @@ function renderHome(membership) {
     ['📊','Stats','See stock and usage insights','stats'],
     // Transaction Manager's "History" and "Live Daily Report" open the exact
     // same screen, so only the more clearly named one is kept for them.
-    ...(role === 'transaction_manager' ? [] : [['🕘','History','Review previous stock activity','history']]),
-    ...(role === 'transaction_manager' ? [['⚡','Live Daily Report','Track Inventory Manager receive & dispatch activity','tm-live-report']] : [])
+    ...(role === 'transaction_manager' ? [['🛒','Make Order List','Prepare, save, generate and share today’s supplier order','tm-order-list'],['⚡','Live Daily Report','Track Inventory Manager receive & dispatch activity','tm-live-report']] : [['🕘','History','Review previous stock activity','history']])
   ];
 
   root.innerHTML = `
@@ -2261,18 +2369,19 @@ function renderAddItem() {
   if (membership?.role !== 'admin') { navigate('home'); return; }
   root.innerHTML=`<div class="dashboard feature-page">
     <div class="topbar"><button class="back-btn" id="feature-back">‹ Back</button><div class="topbar-brand">Inventro</div></div>
-    <section class="feature-header"><p class="eyebrow">Inventory setup</p><h1>Add an item</h1><p>Set item name, unit, opening stock and low-stock alert.</p></section>
+    <section class="feature-header"><p class="eyebrow">Inventory setup</p><h1>Add an item</h1></section>
     <section class="admin-card">
       <div class="field"><label for="item-name">Item name</label><input id="item-name" type="text" placeholder="e.g. Rice" maxlength="80"></div>
       <div class="field"><label for="item-unit">Unit</label><select id="item-unit">${INVENTORY_UNITS.map(u=>`<option value="${u}">${u}</option>`).join('')}</select></div>
-      <div class="two-fields"><div class="field"><label for="opening-stock">Opening stock</label><input id="opening-stock" type="number" min="0" step="0.01" value="0"></div><div class="field"><label for="low-stock">Low stock alert</label><input id="low-stock" type="number" min="0" step="0.01" value="0"></div></div>
+      <div class="two-fields"><div class="field"><label>Opening stock</label><div id="opening-stock-fields" class="quantity-fields-host">${quantityFieldsHtml('opening','kg')}</div></div><div class="field"><label>Low stock alert</label><div id="low-stock-fields" class="quantity-fields-host">${quantityFieldsHtml('low','kg')}</div></div></div>
       <div class="image-preview-box"><div class="preview-placeholder">🖼️</div><div><strong>Automatic item photo</strong><span>Inventro will try to find a product image when you save.</span></div></div>
       <button class="btn btn-primary" id="save-item">Save item</button>
     </section></div>`;
+  const standaloneUnit=root.querySelector('#item-unit');const refreshStandaloneQuantityFields=()=>{const unit=standaloneUnit.value;root.querySelector('#opening-stock-fields').innerHTML=quantityFieldsHtml('opening',unit);root.querySelector('#low-stock-fields').innerHTML=quantityFieldsHtml('low',unit);};standaloneUnit.addEventListener('change',refreshStandaloneQuantityFields);
   root.querySelector('#feature-back').addEventListener('click',()=>navigateBack('home'));
   root.querySelector('#save-item').addEventListener('click',async()=>{
     const b=root.querySelector('#save-item');b.disabled=true;b.innerHTML='<span class="spinner"></span> Finding image & saving…';
-    try{await createInventoryItem({name:root.querySelector('#item-name').value,unit:root.querySelector('#item-unit').value,openingStock:root.querySelector('#opening-stock').value,lowStockAlert:root.querySelector('#low-stock').value});showTemporaryMessage('Item added successfully.','success');navigate('stock');}
+    try{const unit=standaloneUnit.value;const opening=readQuantityFields('opening',unit,{allowZero:true});const low=readQuantityFields('low',unit,{allowZero:true});await createInventoryItem({name:root.querySelector('#item-name').value,unit,openingStock:opening,lowStockAlert:low});showTemporaryMessage('Item added successfully.','success');navigate('stock');}
     catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;b.textContent='Save item';}
   });
 }
@@ -2526,7 +2635,7 @@ async function renderStock(){
   const manager=membership?.role==='inventory_manager';
   const lastReport=manager?localStorage.getItem(`inventroLastStockReport:${currentCompanyId()}`):null;
   root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="stock-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stock-refresh">↻ Refresh</button></div>
-    <section class="feature-header"><p class="eyebrow">Live inventory</p><h1>Stock</h1><p>Live stock levels and current availability across the company.</p></section>
+    <section class="feature-header"><p class="eyebrow">Live inventory</p><h1>Stock</h1></section>
     ${manager?`<section class="inventory-tools"><div class="stock-search-wrap"><span>⌕</span><input id="stock-search" type="search" placeholder="Search stock by item name…" autocomplete="off"></div><div class="inventory-share-actions"><button class="small-action csv-btn" id="share-stock-csv" type="button">📊 Share current stock CSV</button></div></section>${lastReport?`<div class="report-history-note">Last reorder report sent: <strong>${escapeHtml(formatDate(lastReport))}</strong>. New red/yellow items after that time are not part of that old snapshot.</div>`:''}${stockReportSelectionHtml(items)}`:`<section class="inventory-tools"><div class="stock-search-wrap"><span>⌕</span><input id="stock-search" type="search" placeholder="Search stock by item name…" autocomplete="off"></div></section>`}
     ${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}<div id="stock-grid" class="stock-grid"></div></div>`;
   renderStockCards(items);
@@ -2542,7 +2651,7 @@ async function renderMovement(type){
   let items=[],departments=[],error='';try{items=await listItems();departments=await listDepartments();}catch(err){error=friendlyError(err);}
   const receive=type==='receive',sorted=stockSort(items,false);
   root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="movement-back">‹ Back</button><div class="topbar-brand">Inventro</div></div>
-    <section class="feature-header"><p class="eyebrow">Stock movement</p><h1>${receive?'Receive Stock':'Dispatch'}</h1><p>${receive?'Record a newly arrived delivery.':'Record stock leaving the store. Choose an item and department before saving.'}</p></section>
+    <section class="feature-header"><p class="eyebrow">Stock movement</p><h1>${receive?'Receive Stock':'Dispatch'}</h1><p></p></section>
     <section class="admin-card movement-card">${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
       <div class="field"><label for="movement-item-search">Item</label>
         <div class="movement-combobox" id="movement-combobox">
@@ -2553,19 +2662,19 @@ async function renderMovement(type){
       </div>
       <div id="movement-item-insight" class="movement-insight"></div>
       ${receive?'':`<div class="field"><label for="movement-department">Department receiving stock</label><select id="movement-department"><option value="">Select department…</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div>`}
-      <div class="field"><label for="movement-qty">Quantity</label><input id="movement-qty" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0"></div>
+      <div class="field"><label>Quantity</label><div id="movement-quantity-fields" class="quantity-fields-host">${quantityFieldsHtml('movement','')}</div></div>
       <div class="field"><label for="movement-note">Note (optional)</label><input id="movement-note" type="text" maxlength="120" placeholder="${receive?'e.g. Supplier delivery':'e.g. Emergency kitchen issue'}"></div>
       ${receive?`<label class="fulfill-order-option"><input id="fulfill-outstanding-order" type="checkbox"><span><strong>Close outstanding supplier order</strong><small>If this delivery is the order that was previously sent, mark it as received/fulfilled.</small></span></label>`:''}
       <button class="btn btn-primary" id="movement-save" ${items.length?'':'disabled'}>${receive?'Record received stock':'Record dispatch'}</button>
     </section></div>`;
-  const search=root.querySelector('#movement-item-search'),hidden=root.querySelector('#movement-item'),menu=root.querySelector('#movement-item-menu'),combo=root.querySelector('#movement-combobox'),insight=root.querySelector('#movement-item-insight'),fulfillCheck=root.querySelector('#fulfill-outstanding-order'),save=root.querySelector('#movement-save');let selectedItemId='';
+  const search=root.querySelector('#movement-item-search'),hidden=root.querySelector('#movement-item'),menu=root.querySelector('#movement-item-menu'),combo=root.querySelector('#movement-combobox'),insight=root.querySelector('#movement-item-insight'),quantityHost=root.querySelector('#movement-quantity-fields'),fulfillCheck=root.querySelector('#fulfill-outstanding-order'),save=root.querySelector('#movement-save');let selectedItemId='';
   const setMenu=(open)=>{menu.hidden=!open;search.setAttribute('aria-expanded',String(open));};
   function drawOptions(){const q=search.value.trim().toLowerCase();const matches=sorted.filter(i=>String(i.name||'').toLowerCase().includes(q));menu.innerHTML=matches.length?matches.map(i=>`<button type="button" class="movement-item-option" data-item-id="${escapeHtml(i.id)}"><strong>${escapeHtml(i.name)}</strong><span>${Number(i.quantity||0)} ${escapeHtml(i.unit)}</span></button>`).join(''):`<div class="movement-item-empty">No matching stock item found.</div>`;setMenu(true);}
-  async function refreshInsight(item){selectedItemId=item?.id||'';hidden.value=selectedItemId;if(item)search.value=item.name;if(!item){insight.innerHTML='<div class="movement-select-hint">Select a stock item from the dropdown above.</div>';if(save)save.disabled=true;return;}let moves=[];try{moves=await listItemMovements(item.id);}catch(_){}const lastDispatch=[...moves].reverse().find(m=>m.type==='dispatch'),lastReceive=[...moves].reverse().find(m=>m.type==='receive'),state=stockState(Number(item.quantity||0),Number(item.lowStockAlert||0));if(fulfillCheck)fulfillCheck.checked=!!itemHasOutstandingOrder(item);insight.innerHTML=`<div class="movement-insight-head"><strong>${escapeHtml(item.name)}</strong><span class="stock-state movement-state ${state}">${state==='low'?'Low':state==='near'?'Near low':'Good'}</span></div><div class="movement-insight-grid"><div><span>Stock now</span><strong>${Number(item.quantity||0)} ${escapeHtml(item.unit)}</strong></div><div><span>Low limit</span><strong>${Number(item.lowStockAlert||0)} ${escapeHtml(item.unit)}</strong></div><div><span>Last dispatch</span><strong>${lastDispatch?escapeHtml(formatDate(lastDispatch.createdAt)):'No record yet'}</strong></div><div><span>Last arrival</span><strong>${lastReceive?escapeHtml(formatDate(lastReceive.createdAt)):'No record yet'}</strong></div></div>${itemHasOutstandingOrder(item)?`<div class="outstanding-order-note">🔵 <strong>Supplier order outstanding</strong><span>Sent ${escapeHtml(formatDate(item.procurementOrderSentAt))} · ${escapeHtml(item.procurementOrderId)}</span></div>`:''}`;if(save)save.disabled=false;}
+  async function refreshInsight(item){selectedItemId=item?.id||'';hidden.value=selectedItemId;if(item)search.value=item.name;if(quantityHost)quantityHost.innerHTML=quantityFieldsHtml('movement',item?.unit||'');if(!item){insight.innerHTML='<div class="movement-select-hint">Select a stock item from the dropdown above.</div>';if(save)save.disabled=true;return;}let moves=[];try{moves=await listItemMovements(item.id);}catch(_){}const lastDispatch=[...moves].reverse().find(m=>m.type==='dispatch'),lastReceive=[...moves].reverse().find(m=>m.type==='receive'),state=stockState(Number(item.quantity||0),Number(item.lowStockAlert||0));if(fulfillCheck)fulfillCheck.checked=!!itemHasOutstandingOrder(item);insight.innerHTML=`<div class="movement-insight-head"><strong>${escapeHtml(item.name)}</strong><span class="stock-state movement-state ${state}">${state==='low'?'Low':state==='near'?'Near low':'Good'}</span></div><div class="movement-insight-grid"><div><span>Stock now</span><strong>${Number(item.quantity||0)} ${escapeHtml(item.unit)}</strong></div><div><span>Low limit</span><strong>${Number(item.lowStockAlert||0)} ${escapeHtml(item.unit)}</strong></div><div><span>Last dispatch</span><strong>${lastDispatch?escapeHtml(formatDate(lastDispatch.createdAt)):'No record yet'}</strong></div><div><span>Last arrival</span><strong>${lastReceive?escapeHtml(formatDate(lastReceive.createdAt)):'No record yet'}</strong></div></div>${itemHasOutstandingOrder(item)?`<div class="outstanding-order-note">🔵 <strong>Supplier order outstanding</strong><span>Sent ${escapeHtml(formatDate(item.procurementOrderSentAt))} · ${escapeHtml(item.procurementOrderId)}</span></div>`:''}`;if(save)save.disabled=false;}
   search.addEventListener('focus',drawOptions);search.addEventListener('input',()=>{hidden.value='';selectedItemId='';if(save)save.disabled=true;drawOptions();});
   menu.addEventListener('click',e=>{const btn=e.target.closest('[data-item-id]');if(!btn)return;const item=sorted.find(i=>i.id===btn.dataset.itemId);if(item){refreshInsight(item);setMenu(false);}});
   document.addEventListener('click',function outsideMovement(e){if(combo&&!combo.contains(e.target))setMenu(false);},{once:true});
-  root.querySelector('#movement-back').addEventListener('click',()=>navigateBack('home'));save.addEventListener('click',async()=>{save.disabled=true;save.textContent='Checking PIN…';try{if(!selectedItemId)throw new Error('Choose an item first.');const department=root.querySelector('#movement-department')?.value.trim()||'';if(type==='dispatch'&&!department)throw new Error('Select the department receiving this stock.');await changeStock(selectedItemId,root.querySelector('#movement-qty').value,type,root.querySelector('#movement-note').value,{fulfillOutstandingOrder:!!fulfillCheck?.checked,department});showTemporaryMessage(receive?'Received stock recorded.':'Dispatch recorded.','success');navigate('stock');}catch(err){showTemporaryMessage(friendlyError(err),'error');save.disabled=false;save.textContent=receive?'Record received stock':'Record dispatch';}});
+  root.querySelector('#movement-back').addEventListener('click',()=>navigateBack('home'));save.addEventListener('click',async()=>{save.disabled=true;save.textContent='Checking PIN…';try{if(!selectedItemId)throw new Error('Choose an item first.');const department=root.querySelector('#movement-department')?.value.trim()||'';if(type==='dispatch'&&!department)throw new Error('Select the department receiving this stock.');const selectedItem=sorted.find(i=>String(i.id)===String(selectedItemId));if(!selectedItem)throw new Error('Choose an item first.');const normalizedQty=readQuantityFields('movement',selectedItem.unit,{allowZero:false});await changeStock(selectedItemId,normalizedQty,type,root.querySelector('#movement-note').value,{fulfillOutstandingOrder:!!fulfillCheck?.checked,department});showTemporaryMessage(receive?'Received stock recorded.':'Dispatch recorded.','success');navigate('stock');}catch(err){showTemporaryMessage(friendlyError(err),'error');save.disabled=false;save.textContent=receive?'Record received stock':'Record dispatch';}});
   refreshInsight(null);
 }
 
@@ -2633,14 +2742,14 @@ async function markNotificationRead(notificationId) {
 
 async function renderRequests(){
   if(!canCreateRequest()&&!canManageRequests()){navigate('home');return;}let items=[],requests=[],departments=[],notifications=[],error='';try{items=await listItems();requests=await listRequests();departments=await listDepartments();if(['stock_requester','chef','request','transaction_manager'].includes(membership?.role))notifications=await listMyNotifications();}catch(err){error=friendlyError(err);}const canManage=canManageRequests(),canViewAllRequests=['admin','inventory_manager'].includes(membership?.role);const requestSelfService=['stock_requester','chef','request','transaction_manager'].includes(membership?.role);let requestDateFilter='';
-  root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="requests-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="requests-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Kitchen workflow</p><h1>Stock Requests</h1><p>Stock Requisitioner and Transaction Manager users ask for stock for a department. Inventory Manager reviews and dispatches approved requests.</p></section>${requestSelfService?`<section class="admin-card"><div class="admin-card-title"><div><h2>New request</h2><p>Choose what the kitchen needs.</p></div></div><div class="field"><label for="request-item">Item</label><select id="request-item">${items.map(i=>`<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)} — ${i.quantity} ${escapeHtml(i.unit)} available</option>`).join('')}</select></div><div class="field"><label for="request-department">Department</label><select id="request-department"><option value="">Select department…</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label for="request-qty">Quantity needed</label><input id="request-qty" type="number" min="0.01" step="0.01" placeholder="0"></div><div class="field"><label for="request-note">Reason / note</label><input id="request-note" type="text" maxlength="120" placeholder="e.g. Dinner preparation"></div><button class="btn btn-primary" id="request-save" ${items.length?'':'disabled'}>Send request</button></section>`:''}${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${requestSelfService?`<section class="admin-card stock-request-workspace"><div class="stock-request-tabs" role="tablist" aria-label="Stock request information"><button type="button" class="stock-request-tab active" id="stock-tab-notifications" role="tab" aria-selected="true" aria-controls="stock-panel-notifications">🔔 My notifications ${notifications.filter(n=>!n.read).length?`<span class="notification-count">${notifications.filter(n=>!n.read).length}</span>`:''}</button><button type="button" class="stock-request-tab" id="stock-tab-requests" role="tab" aria-selected="false" aria-controls="stock-panel-requests">📝 My requests</button></div><div class="stock-request-tab-panel active" id="stock-panel-notifications" role="tabpanel"><div class="stock-request-panel-head"><div><h2>My notifications</h2><p>Request status updates and stock dispatch notifications.</p></div></div><div id="notification-list-wrap" class="notification-list">${notifications.map(n=>`<article class="notification-item ${n.read?'read':'unread'}"><div><strong>${escapeHtml(n.title||'Request update')}</strong><p>${escapeHtml(n.message||'')}</p><small>${escapeHtml(formatDate(n.createdAt))}</small></div>${!n.read?`<button class="small-action" data-read-notification="${escapeHtml(n.id)}">Mark read</button>`:''}</article>`).join('')||`<div class="empty-team"><div class="empty-icon">🔔</div><strong>No notifications</strong><span>Your request updates will appear here.</span></div>`}</div></div><div class="stock-request-tab-panel" id="stock-panel-requests" role="tabpanel" hidden><div class="stock-request-panel-head"><div><h2>My requests <span id="request-visible-count"></span></h2><p>Track the requests you have submitted and their current status.</p></div></div><div class="request-filter-card-inner"><div class="request-filter-row"><div class="field"><label for="request-date-filter">Filter by date</label><input id="request-date-filter" type="date"></div><button class="small-action" id="request-date-clear" type="button">Show all dates</button></div></div><div id="request-list-render" class="request-list"></div></div></section>`:`<section class="admin-card request-filter-card"><div class="request-filter-row"><div class="field"><label for="request-date-filter">Filter by date</label><input id="request-date-filter" type="date"></div><button class="small-action" id="request-date-clear" type="button">Show all dates</button></div></section><section class="admin-card"><div class="admin-card-title"><div><h2>${canViewAllRequests?'All requests':'My requests'} <span id="request-visible-count"></span></h2><p>Approved requests stay yellow until dispatched. Dispatched requests turn green.</p></div></div><div id="request-list-render" class="request-list"></div></section>`}</div>`;
-  const listEl=root.querySelector('#request-list-render'),countEl=root.querySelector('#request-visible-count');function renderList(){const visible=requests.filter(r=>(canViewAllRequests||r.requestedByUid===auth.currentUser?.uid)&&(!requestDateFilter||localDateKey(r.createdAt?.toDate?.()||new Date(r.createdAt||0))===requestDateFilter));countEl.textContent=`(${visible.length})`;listEl.innerHTML=visible.map(r=>`<article class="request-card request-status-card-${escapeHtml(r.status)}"><div><div class="request-title"><strong>${escapeHtml(r.itemName)}</strong><span class="request-status ${escapeHtml(r.status)}">${escapeHtml(r.status==='approved'?'READY TO DISPATCH':r.status==='fulfilled'?'DISPATCHED':r.status.toUpperCase())}</span></div><div class="request-qty">${r.quantity} ${escapeHtml(r.unit)}</div><div class="stock-meta">Department: <strong>${escapeHtml(r.department||'Not specified')}</strong> · By ${escapeHtml(personRef(r.requestedByEmail||'', r.requestedByRole||'stock_requester', r.requestedByName||''))} · ${escapeHtml(formatDate(r.createdAt))}</div>${r.note?`<div class="request-note">${escapeHtml(r.note)}</div>`:''}</div><div class="request-actions">${canManage&&r.status==='pending'?`<button class="small-action approve" data-request-action="approve" data-id="${escapeHtml(r.id)}">Approve</button><button class="small-action reject" data-request-action="reject" data-id="${escapeHtml(r.id)}">Reject</button>`:''}${canManage&&r.status==='approved'?`<button class="small-action fulfill-action" data-request-action="fulfill" data-id="${escapeHtml(r.id)}">Dispatch</button>`:''}${!canManage&&r.status==='pending'&&r.requestedByUid===auth.currentUser?.uid?`<button class="small-action reject" data-request-action="cancel" data-id="${escapeHtml(r.id)}">Cancel request</button>`:''}</div></article>`).join('')||`<div class="empty-team"><div class="empty-icon">📝</div><strong>No requests for this date</strong><span>Try another date or show all dates.</span></div>`;listEl.querySelectorAll('[data-request-action]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{const action=btn.dataset.requestAction;if(action==='fulfill')await fulfillRequest(btn.dataset.id);else if(action==='cancel')await cancelStockRequest(btn.dataset.id);else await updateRequestStatus(btn.dataset.id,action==='approve'?'approved':'rejected');showTemporaryMessage(action==='fulfill'?'Request dispatched and stock recorded.':action==='cancel'?'Request cancelled.':'Request updated.','success');await renderRequests();}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));}
+  root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="requests-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="requests-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Kitchen workflow</p><h1>Stock Requests</h1></section>${requestSelfService?`<section class="admin-card"><div class="admin-card-title"><div><h2>New request</h2></div></div><div class="field"><label for="request-item">Item</label><select id="request-item">${items.map(i=>`<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)} — ${escapeHtml(formatQuantityParts(i.quantity,i.unit))} available</option>`).join('')}</select></div><div class="field"><label for="request-department">Department</label><select id="request-department"><option value="">Select department…</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Quantity needed</label><div id="request-quantity-fields" class="quantity-fields-host">${quantityFieldsHtml('request',items[0]?.unit||'')}</div></div><div class="field"><label for="request-note">Reason / note</label><input id="request-note" type="text" maxlength="120" placeholder="e.g. Dinner preparation"></div><button class="btn btn-primary" id="request-save" ${items.length?'':'disabled'}>Send request</button></section>`:''}${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${requestSelfService?`<section class="admin-card stock-request-workspace"><div class="stock-request-tabs" role="tablist" aria-label="Stock request information"><button type="button" class="stock-request-tab active" id="stock-tab-notifications" role="tab" aria-selected="true" aria-controls="stock-panel-notifications">🔔 My notifications ${notifications.filter(n=>!n.read).length?`<span class="notification-count">${notifications.filter(n=>!n.read).length}</span>`:''}</button><button type="button" class="stock-request-tab" id="stock-tab-requests" role="tab" aria-selected="false" aria-controls="stock-panel-requests">📝 My requests</button></div><div class="stock-request-tab-panel active" id="stock-panel-notifications" role="tabpanel"><div class="stock-request-panel-head"><div><h2>My notifications</h2><p>Request status updates and stock dispatch notifications.</p></div></div><div id="notification-list-wrap" class="notification-list">${notifications.map(n=>`<article class="notification-item ${n.read?'read':'unread'}"><div><strong>${escapeHtml(n.title||'Request update')}</strong><p>${escapeHtml(n.message||'')}</p><small>${escapeHtml(formatDate(n.createdAt))}</small></div>${!n.read?`<button class="small-action" data-read-notification="${escapeHtml(n.id)}">Mark read</button>`:''}</article>`).join('')||`<div class="empty-team"><div class="empty-icon">🔔</div><strong>No notifications</strong><span>Your request updates will appear here.</span></div>`}</div></div><div class="stock-request-tab-panel" id="stock-panel-requests" role="tabpanel" hidden><div class="stock-request-panel-head"><div><h2>My requests <span id="request-visible-count"></span></h2><p>Track the requests you have submitted and their current status.</p></div></div><div class="request-filter-card-inner"><div class="request-filter-row"><div class="field"><label for="request-date-filter">Filter by date</label><input id="request-date-filter" type="date"></div><button class="small-action" id="request-date-clear" type="button">Show all dates</button></div></div><div id="request-list-render" class="request-list"></div></div></section>`:`<section class="admin-card request-filter-card"><div class="request-filter-row"><div class="field"><label for="request-date-filter">Filter by date</label><input id="request-date-filter" type="date"></div><button class="small-action" id="request-date-clear" type="button">Show all dates</button></div></section><section class="admin-card"><div class="admin-card-title"><div><h2>${canViewAllRequests?'All requests':'My requests'} <span id="request-visible-count"></span></h2><p>Approved requests stay yellow until dispatched. Dispatched requests turn green.</p></div></div><div id="request-list-render" class="request-list"></div></section>`}</div>`;
+  const listEl=root.querySelector('#request-list-render'),countEl=root.querySelector('#request-visible-count');function renderList(){const visible=requests.filter(r=>(canViewAllRequests||r.requestedByUid===auth.currentUser?.uid)&&(!requestDateFilter||localDateKey(r.createdAt?.toDate?.()||new Date(r.createdAt||0))===requestDateFilter));countEl.textContent=`(${visible.length})`;listEl.innerHTML=visible.map(r=>`<article class="request-card request-status-card-${escapeHtml(r.status)}"><div><div class="request-title"><strong>${escapeHtml(r.itemName)}</strong><span class="request-status ${escapeHtml(r.status)}">${escapeHtml(r.status==='approved'?'READY TO DISPATCH':r.status==='fulfilled'?'DISPATCHED':r.status.toUpperCase())}</span></div><div class="request-qty">${escapeHtml(formatQuantityParts(r.quantity,r.unit))}</div><div class="stock-meta">Department: <strong>${escapeHtml(r.department||'Not specified')}</strong> · By ${escapeHtml(personRef(r.requestedByEmail||'', r.requestedByRole||'stock_requester', r.requestedByName||''))} · ${escapeHtml(formatDate(r.createdAt))}</div>${r.note?`<div class="request-note">${escapeHtml(r.note)}</div>`:''}</div><div class="request-actions">${canManage&&r.status==='pending'?`<button class="small-action approve" data-request-action="approve" data-id="${escapeHtml(r.id)}">Approve</button><button class="small-action reject" data-request-action="reject" data-id="${escapeHtml(r.id)}">Reject</button>`:''}${canManage&&r.status==='approved'?`<button class="small-action fulfill-action" data-request-action="fulfill" data-id="${escapeHtml(r.id)}">Dispatch</button>`:''}${!canManage&&r.status==='pending'&&r.requestedByUid===auth.currentUser?.uid?`<button class="small-action reject" data-request-action="cancel" data-id="${escapeHtml(r.id)}">Cancel request</button>`:''}</div></article>`).join('')||`<div class="empty-team"><div class="empty-icon">📝</div><strong>No requests for this date</strong><span>Try another date or show all dates.</span></div>`;listEl.querySelectorAll('[data-request-action]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{const action=btn.dataset.requestAction;if(action==='fulfill')await fulfillRequest(btn.dataset.id);else if(action==='cancel')await cancelStockRequest(btn.dataset.id);else await updateRequestStatus(btn.dataset.id,action==='approve'?'approved':'rejected');showTemporaryMessage(action==='fulfill'?'Request dispatched and stock recorded.':action==='cancel'?'Request cancelled.':'Request updated.','success');await renderRequests();}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));}
   if(requestSelfService){
     const tabN=root.querySelector('#stock-tab-notifications'),tabR=root.querySelector('#stock-tab-requests'),panelN=root.querySelector('#stock-panel-notifications'),panelR=root.querySelector('#stock-panel-requests');
     const activateStockTab=(which)=>{const notificationsActive=which==='notifications';tabN.classList.toggle('active',notificationsActive);tabR.classList.toggle('active',!notificationsActive);tabN.setAttribute('aria-selected',String(notificationsActive));tabR.setAttribute('aria-selected',String(!notificationsActive));panelN.classList.toggle('active',notificationsActive);panelR.classList.toggle('active',!notificationsActive);panelN.hidden=!notificationsActive;panelR.hidden=notificationsActive;};
     tabN.addEventListener('click',()=>activateStockTab('notifications'));tabR.addEventListener('click',()=>activateStockTab('requests'));activateStockTab('notifications');
   }
-  root.querySelector('#request-date-filter').addEventListener('change',e=>{requestDateFilter=e.target.value;renderList();});root.querySelector('#request-date-clear').addEventListener('click',()=>{requestDateFilter='';root.querySelector('#request-date-filter').value='';renderList();});root.querySelector('#requests-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#requests-refresh').addEventListener('click',()=>renderRequests());root.querySelector('#request-save')?.addEventListener('click',async()=>{const b=root.querySelector('#request-save');b.disabled=true;b.textContent='Sending…';try{await createStockRequest({itemId:root.querySelector('#request-item').value,quantity:root.querySelector('#request-qty').value,department:root.querySelector('#request-department').value,note:root.querySelector('#request-note').value});showTemporaryMessage('Stock request sent.','success');await renderRequests();}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;b.textContent='Send request';}});root.querySelectorAll('[data-read-notification]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await markNotificationRead(btn.dataset.readNotification);}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));startMyNotificationListener();startRequestListListener();renderList();
+  root.querySelector('#request-item')?.addEventListener('change',e=>{const item=items.find(i=>String(i.id)===String(e.target.value));const host=root.querySelector('#request-quantity-fields');if(host)host.innerHTML=quantityFieldsHtml('request',item?.unit||'');});root.querySelector('#request-date-filter').addEventListener('change',e=>{requestDateFilter=e.target.value;renderList();});root.querySelector('#request-date-clear').addEventListener('click',()=>{requestDateFilter='';root.querySelector('#request-date-filter').value='';renderList();});root.querySelector('#requests-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#requests-refresh').addEventListener('click',()=>renderRequests());root.querySelector('#request-save')?.addEventListener('click',async()=>{const b=root.querySelector('#request-save');b.disabled=true;b.textContent='Sending…';try{const requestItem=items.find(i=>String(i.id)===String(root.querySelector('#request-item')?.value));if(!requestItem)throw new Error('Choose an item first.');const requestQty=readQuantityFields('request',requestItem.unit,{allowZero:false});await createStockRequest({itemId:requestItem.id,quantity:requestQty,department:root.querySelector('#request-department').value,note:root.querySelector('#request-note').value});showTemporaryMessage('Stock request sent.','success');await renderRequests();}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;b.textContent='Send request';}});root.querySelectorAll('[data-read-notification]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await markNotificationRead(btn.dataset.readNotification);}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));startMyNotificationListener();startRequestListListener();renderList();
 }
 
 
@@ -2752,26 +2861,277 @@ function buildTransactionManagerDailyReport(rows, day, options={}) {
   }).filter(Boolean).sort((a,b)=>a.itemName.localeCompare(b.itemName,undefined,{sensitivity:'base'}));
   return {reports,todayRows:visibleRows,allInventoryManagerRows:imDayRows};
 }
-function renderTransactionManagerLiveReport(root, rows, day, options={}) {
-  const target=root.querySelector('#tm-live-report');
+async function getDailyOrderList(day) {
+  const companyId=currentCompanyId(), user=auth.currentUser;
+  if(!companyId || !day || !user) return null;
+  const ref=collection(db,'companies',companyId,'orderLists');
+  // Transaction Managers query only their own lists. This is intentionally a
+  // constrained query so Firestore Rules can prove the read is owner-scoped.
+  if(membership?.role==='transaction_manager') {
+    const snap=await getDocs(query(ref,where('dateKey','==',day),where('preparedByUid','==',user.uid)));
+    const first=snap.docs[0];
+    return first ? {id:first.id,...first.data()} : null;
+  }
+  // Admin is read-only and may inspect any saved TM list.
+  if(membership?.role==='admin') {
+    const snap=await getDoc(doc(db,'companies',companyId,'orderLists',day));
+    return snap.exists()?{id:snap.id,...snap.data()}:null;
+  }
+  throw new Error('Only the Transaction Manager or Admin can view supplier order lists.');
+}
+
+async function listOrderLists() {
+  const companyId=currentCompanyId(), user=auth.currentUser;
+  if(!companyId || !user) return [];
+  const ref=collection(db,'companies',companyId,'orderLists');
+  let q;
+  if(membership?.role==='admin') q=query(ref);
+  else if(membership?.role==='transaction_manager') q=query(ref,where('preparedByUid','==',user.uid));
+  else throw new Error('Only the Transaction Manager or Admin can view supplier order lists.');
+  const snap=await getDocs(q);
+  return snap.docs.map(d=>({id:d.id,...d.data()}))
+    .sort((a,b)=>String(b.dateKey||b.id).localeCompare(String(a.dateKey||a.id)));
+}
+
+function orderListItemsFromInventory(items, saved, {includeCurrentRed=true} = {}) {
+  const savedItems=Array.isArray(saved?.items)?saved.items:[];
+  const inventoryById=new Map(items.map(i=>[String(i.id),i]));
+  const red=items.filter(i=>stockState(Number(i.quantity||0),Number(i.lowStockAlert||0))==='low');
+  const savedById=new Map(savedItems.map(x=>[String(x.itemId),x]));
+  const out=[];
+
+  // For an editable/current-day list, keep all currently-red goods at the top.
+  // If a red item became low after the list was first saved, it is added back
+  // automatically so the TM cannot accidentally omit a mandatory item.
+  if(includeCurrentRed){
+    red.forEach(i=>{
+      const old=savedById.get(String(i.id));
+      out.push({itemId:i.id,itemName:i.name,unit:i.unit,priority:'red',quantity:old?.quantity??'',required:true});
+    });
+  }
+
+  // Saved lists are authoritative for their non-red entries. This is important
+  // for historical/locked days: the page must show exactly what was ordered that day,
+  // not today's current red/yellow stock state.
+  savedItems.filter(x=>!red.some(i=>String(i.id)===String(x.itemId))).forEach(x=>{
+    const inv=inventoryById.get(String(x.itemId));
+    out.push({
+      itemId:String(x.itemId),
+      itemName:String(x.itemName||inv?.name||x.itemId),
+      unit:String(x.unit||inv?.unit||''),
+      priority:x.priority==='yellow'?'yellow':'normal',
+      quantity:x.quantity??'',
+      required:false
+    });
+  });
+
+  // If there is no saved list yet, the TM gets the current yellow items as an
+  // easy optional shortlist, but they remain removable/unselected.
+  if(!savedItems.length){
+    items.filter(i=>stockState(Number(i.quantity||0),Number(i.lowStockAlert||0))==='near')
+      .forEach(i=>out.push({itemId:i.id,itemName:i.name,unit:i.unit,priority:'yellow',quantity:'',required:false}));
+  }
+  return out;
+}
+
+function validateOrderListItems(listItems, inventoryItems) {
+  const rows=new Map(listItems.map(x=>[String(x.itemId),x]));
+  const missing=[];
+  inventoryItems.filter(i=>stockState(Number(i.quantity||0),Number(i.lowStockAlert||0))==='low').forEach(i=>{
+    const row=rows.get(String(i.id));
+    if(!row || !Number.isFinite(Number(row.quantity)) || Number(row.quantity)<=0) missing.push(i.name);
+  });
+  if(missing.length) throw new Error(`Enter a quantity for every red-zone item: ${missing.join(', ')}.`);
+  if(!listItems.length) throw new Error('Add at least one item with a quantity greater than 0.');
+  return true;
+}
+
+async function saveDailyOrderList(day, listItems, extra={}) {
+  const companyId=currentCompanyId(), user=auth.currentUser;
+  if(!companyId || !user || membership?.role!=='transaction_manager') throw new Error('Only the Transaction Manager can manage supplier order lists.');
+  const clean=listItems.map(x=>({
+    itemId:String(x.itemId),itemName:String(x.itemName||''),unit:String(x.unit||''),
+    priority:x.priority==='red'?'red':x.priority==='yellow'?'yellow':'normal',
+    quantity:Number(x.quantity)
+  })).filter(x=>x.itemName && Number.isFinite(x.quantity) && x.quantity>0);
+  const ref=doc(db,'companies',companyId,'orderLists',day);
+  const existing=await getDoc(ref);
+  if(existing.exists() && existing.data()?.locked===true) throw new Error('This order list is locked because the day is already closed.');
+  const now=new Date();
+  const dayEnd=new Date(`${day}T23:59:59.999`);
+  const data={
+    dateKey:day, items:clean, locked:false,
+    preparedByUid:existing.exists()?existing.data().preparedByUid:user.uid,
+    preparedByEmail:existing.exists()?existing.data().preparedByEmail:(user.email||'').toLowerCase(),
+    preparedByName:existing.exists()?existing.data().preparedByName:(user.displayName||''),
+    createdAt:existing.exists()?existing.data().createdAt:serverTimestamp(),
+    updatedAt:serverTimestamp(), dayEndAt:dayEnd,
+    version:Number(existing.data()?.version||0)+1,
+    ...extra
+  };
+  await setDoc(ref,data,{merge:true});
+  return {...(existing.exists()?existing.data():{}),...data,id:day};
+}
+
+async function recordOrderListVersion(day, listItems, pdfGeneratedAt) {
+  const companyId=currentCompanyId(), user=auth.currentUser;
+  if(!companyId || !user || membership?.role!=='transaction_manager') return;
+  const parent=doc(db,'companies',companyId,'orderLists',day);
+  const current=await getDoc(parent);
+  if(!current.exists()) return;
+  const version=Number(current.data()?.version||1);
+  await setDoc(doc(collection(parent,'versions'),String(version)),{
+    version,dateKey:day,items:listItems,generatedAt:pdfGeneratedAt,
+    preparedByUid:user.uid,preparedByEmail:(user.email||'').toLowerCase(),
+    preparedByName:user.displayName||'',createdAt:serverTimestamp()
+  });
+}
+
+async function buildOrderListPdf(day, orderItems, preparedByName, preparedByEmail) {
+  const JsPDF=await loadJsPdf(); const pdf=new JsPDF({unit:'mm',format:'a4'});
+  const company=membership?.companyName||'Company';
+  const now=new Date();
+  pdf.setTextColor(20,27,38);pdf.setFont('helvetica','bold');pdf.setFontSize(20);pdf.text('INVENTRO',16,18);
+  pdf.setFontSize(14);pdf.text('Supplier Order List',16,27);
+  pdf.setFont('helvetica','normal');pdf.setFontSize(9);
+  pdf.text(company,16,34);pdf.text(`Order date: ${day}`,16,39);
+  pdf.text(`Prepared by: ${preparedByName||preparedByEmail||'Transaction Manager'}`,16,44);
+  pdf.text(`Generated: ${formatDate(now)}`,16,49);
+  pdf.setDrawColor(220,226,234);pdf.line(16,53,194,53);
+  let y=63; const headers=['Priority','Item','Quantity','Unit']; const xs=[16,45,145,170];
+  pdf.setFont('helvetica','bold');pdf.setFontSize(9);headers.forEach((h,i)=>pdf.text(h,xs[i],y));y+=8;pdf.setFont('helvetica','normal');
+  const priorityRank = { red: 0, yellow: 1, normal: 2 };
+  const sorted = [...orderItems].sort((a, b) => {
+    const priorityDifference = (priorityRank[a.priority] ?? 2) - (priorityRank[b.priority] ?? 2);
+    if (priorityDifference !== 0) return priorityDifference;
+    return String(a.itemName || '').localeCompare(String(b.itemName || ''), undefined, { sensitivity: 'base' });
+  });
+  sorted.forEach(item=>{
+    if(y>278){pdf.addPage();y=20;pdf.setFont('helvetica','bold');headers.forEach((h,i)=>pdf.text(h,xs[i],y));y+=8;pdf.setFont('helvetica','normal');}
+    pdf.text(item.priority==='red'?'RED':item.priority==='yellow'?'YELLOW':'NORMAL',xs[0],y);
+    pdf.text(String(item.itemName).slice(0,42),xs[1],y);
+    pdf.text(formatQty(item.quantity),xs[2],y);pdf.text(String(item.unit||''),xs[3],y);
+    pdf.setDrawColor(238,241,245);pdf.line(16,y+2,194,y+2);y+=8;
+  });
+  y+=6;pdf.setFontSize(8);pdf.setTextColor(90,98,110);
+  pdf.text(`Total items: ${sorted.length}  •  Red: ${sorted.filter(x=>x.priority==='red').length}  •  Yellow: ${sorted.filter(x=>x.priority==='yellow').length}`,16,y);
+  pdf.text('Red-zone items are mandatory. Yellow-zone items are optional selections.',16,y+5);
+  return new File([pdf.output('blob')],`Inventro-Order-List-${day}.pdf`,{type:'application/pdf'});
+}
+
+async function generateAndShareDailyOrderList(day, orderItems) {
+  if(membership?.role!=='transaction_manager') throw new Error('Only the Transaction Manager can generate or share supplier order PDFs.');
+  if(!orderItems.length) throw new Error('Add at least one item with a quantity greater than 0.');
+  const user=auth.currentUser;
+  const now=new Date();
+  const existing=await getDailyOrderList(day);
+  const saved=await saveDailyOrderList(day,orderItems,{lastGeneratedAt:serverTimestamp()});
+  const file=await buildOrderListPdf(day,orderItems,user?.displayName||'',user?.email||'');
+  const mode=isMobileDevice() && navigator.share
+    ? await shareFile(file,`${membership?.companyName||'Company'} — Supplier order list ${day}`)
+    : downloadPdfFile(file);
+  await recordOrderListVersion(day,orderItems,now.toISOString());
+  return {mode,version:saved.version||1};
+}
+
+function downloadPdfFile(file){
+  const url=URL.createObjectURL(file);const a=document.createElement('a');
+  a.href=url;a.download=file.name;a.rel='noopener';document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);return 'downloaded';
+}
+
+async function renderDailyOrderListBuilder(target, day, inventoryItems) {
+  if(!target) return;
+  const role=membership?.role||''; const isTM=role==='transaction_manager'; const isAdmin=role==='admin';
+  if(!isTM && !isAdmin) { target.innerHTML='<div class="error-box">Only the Transaction Manager or Admin can view supplier order lists.</div>'; return; }
+  let saved=null;
+  try{saved=await getDailyOrderList(day);}catch(err){target.innerHTML=`<div class="error-box">${escapeHtml(friendlyError(err))}</div>`;return;}
+  const today=localDateKey(), editable=isTM && day===today && saved?.locked!==true;
+  const source=orderListItemsFromInventory(inventoryItems,saved,{includeCurrentRed:editable});
+  const existingById=new Map(source.map(x=>[String(x.itemId),x]));
+  const selected=source.filter(x=>x.priority==='red'||x.quantity!==''||x.priority==='yellow');
+  target.innerHTML=`
+    <section class="tm-order-card">
+      <div class="tm-order-head"><div><div class="eyebrow">Procurement</div><h3>🛒 Supplier order list</h3><p>${escapeHtml(day)}</p></div><span class="tm-order-lock ${editable?'open':'locked'}">${editable?'OPEN':'🔒 LOCKED'}</span></div>
+      ${editable?`<div class="tm-order-add"><select id="tm-order-item"><option value="">Add another inventory item…</option>${inventoryItems.filter(i=>!existingById.has(String(i.id))).sort((a,b)=>String(a.name).localeCompare(String(b.name),undefined,{sensitivity:'base'})).map(i=>`<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)} · ${escapeHtml(formatQuantityParts(i.quantity||0,i.unit||''))}</option>`).join('')}</select><button class="small-action" id="tm-order-add-btn" type="button">＋ Add item</button></div>`:''}
+      <div class="tm-order-list" id="tm-order-list">${selected.length?selected.map(x=>`<div class="tm-order-row ${x.priority}-priority" data-order-row="${escapeHtml(x.itemId)}"><div class="tm-order-priority">${x.priority==='red'?'🔴':x.priority==='yellow'?'🟡':'⚪'}</div><div class="tm-order-name"><strong>${escapeHtml(x.itemName)}</strong><small>${x.priority==='red'?'Mandatory red zone':x.priority==='yellow'?'Optional yellow zone':'Manual selection'}</small></div><input class="tm-order-qty" type="number" min="0.01" step="0.01" value="${x.quantity===''?'':escapeHtml(x.quantity)}" ${x.priority==='red'?'required':''} ${editable?'':'disabled'} placeholder="Qty"><span class="tm-order-unit">${escapeHtml(x.unit)}</span>${editable&&x.priority!=='red'?`<button class="tm-order-remove" type="button" aria-label="Remove item">×</button>`:''}</div>`).join(''):`<div class="empty-team">No order items yet. Add an item above.</div>`}</div>
+      ${editable?`<div class="tm-order-actions"><button class="small-action" id="tm-order-save" type="button">💾 Save list</button><button class="small-action report-btn" id="tm-order-pdf" type="button">📄 Generate PDF & Share</button></div>`:`<div class="tm-order-final"><strong>Final saved list</strong><span>${escapeHtml(saved?.preparedByName||saved?.preparedByEmail||'Transaction Manager')} · ${escapeHtml(formatDate(saved?.updatedAt||saved?.lastGeneratedAt))}</span>${isAdmin?'':''}</div>`}
+    </section>`;
+  const readRows=()=>[...target.querySelectorAll('.tm-order-row')].map(row=>({
+    itemId:row.dataset.orderRow,itemName:row.querySelector('.tm-order-name strong')?.textContent||'',unit:row.querySelector('.tm-order-unit')?.textContent||'',
+    priority:row.classList.contains('red-priority')?'red':row.classList.contains('yellow-priority')?'yellow':'normal',
+    quantity:Number(row.querySelector('.tm-order-qty')?.value||0)
+  })).filter(x=>x.quantity>0);
+  target.querySelector('#tm-order-add-btn')?.addEventListener('click',()=>{
+    const id=target.querySelector('#tm-order-item')?.value;if(!id)return;
+    const item=inventoryItems.find(i=>String(i.id)===String(id));if(!item)return;
+    const list=target.querySelector('#tm-order-list');const row=document.createElement('div');
+    row.className='tm-order-row normal-priority';row.dataset.orderRow=item.id;
+    row.innerHTML=`<div class="tm-order-priority">⚪</div><div class="tm-order-name"><strong>${escapeHtml(item.name)}</strong><small>Manual selection</small></div><input class="tm-order-qty" type="number" min="0.01" step="0.01" placeholder="Qty"><span class="tm-order-unit">${escapeHtml(item.unit)}</span><button class="tm-order-remove" type="button" aria-label="Remove item">×</button>`;
+    list.querySelector('.empty-team')?.remove();list.appendChild(row);target.querySelector('#tm-order-item').value='';
+    row.querySelector('.tm-order-remove').addEventListener('click',()=>row.remove());
+  });
+  target.querySelectorAll('.tm-order-remove').forEach(btn=>btn.addEventListener('click',()=>btn.closest('.tm-order-row')?.remove()));
+  target.querySelector('#tm-order-save')?.addEventListener('click',async e=>{
+    const btn=e.currentTarget;btn.disabled=true;try{const rows=readRows();validateOrderListItems(rows,inventoryItems);await saveDailyOrderList(day,rows);showTemporaryMessage('Today’s order list saved. You can edit it again.','success');await renderDailyOrderListBuilder(target,day,inventoryItems);}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{btn.disabled=false;}
+  });
+  target.querySelector('#tm-order-pdf')?.addEventListener('click',async e=>{
+    const btn=e.currentTarget;btn.disabled=true;btn.textContent='Preparing PDF…';
+    try{const rows=readRows();validateOrderListItems(rows,inventoryItems);const result=await generateAndShareDailyOrderList(day,rows);showTemporaryMessage(result.mode==='shared'?'Order PDF shared successfully.':'Order PDF downloaded.','success');await renderDailyOrderListBuilder(target,day,inventoryItems);}
+    catch(err){if(err?.name!=='AbortError')showTemporaryMessage(friendlyError(err),'error');}
+    finally{btn.disabled=false;btn.textContent='📄 Generate PDF & Share';}
+  });
+}
+
+async function renderTransactionManagerOrderHistory(target) {
   if(!target) return;
   const today=localDateKey();
-  const live=day===today;
+  const isAdmin=membership?.role==='admin';
+  const initialDay=today;
+  target.innerHTML=`<section class="tm-order-history">
+    <div class="tm-order-history-head"><div><div class="eyebrow">Supplier orders</div><h3>Supplier Order List</h3></div></div>
+    <div class="tm-order-history-date"><div><label for="tm-order-history-day">Date</label><input id="tm-order-history-day" type="date" value="${initialDay}" max="${today}"></div><button class="small-action" id="tm-order-history-load" type="button">View</button></div>
+    <div id="tm-order-history-result"><div class="loading-inline">Select a date.</div></div>
+  </section>`;
+
+  const dateInput=target.querySelector('#tm-order-history-day');
+  const loadBtn=target.querySelector('#tm-order-history-load');
+  const result=target.querySelector('#tm-order-history-result');
+  const load=async()=>{
+    const day=dateInput?.value||today;
+    if(day>today){ showTemporaryMessage('Choose today or an earlier date.','error'); return; }
+    result.innerHTML='<div class="loading-inline">Loading order list…</div>';
+    try{
+      const saved=await getDailyOrderList(day);
+      if(!saved){
+        result.innerHTML=`<div class="empty-team"><div class="empty-icon">🛒</div><strong>No supplier order for ${escapeHtml(day)}</strong><span>No Transaction Manager list was saved for this date.</span></div>`;
+        return;
+      }
+      const items=await listItems(true);
+      await renderDailyOrderListBuilder(result,day,items);
+      // Historical/admin view is read-only. The builder already enforces this.
+    }catch(err){
+      result.innerHTML=`<div class="error-box">${escapeHtml(friendlyError(err))}</div>`;
+    }
+  };
+  loadBtn?.addEventListener('click',load);
+  dateInput?.addEventListener('change',load);
+  await load();
+}
+
+function renderTransactionManagerLiveReport(root, rows, day, options={}) {
+  const target=options.target || root.querySelector('#tm-live-report'); if(!target)return;
+  const today=localDateKey(), live=day===today;
   const reportItems=options.items || realtimeLatestItems;
   const {reports,todayRows}=buildTransactionManagerDailyReport(rows,day,{...options,items:reportItems});
   const updated=todayRows.map(r=>r.createdAt?.toMillis?.()||0).filter(Boolean).sort((a,b)=>b-a)[0];
   const latest=updated ? formatDate(new Date(updated)) : 'No transactions yet';
   target.innerHTML=`
-    <div class="tm-live-head">
-      <div><div class="tm-live-title"><span class="tm-live-dot ${live?'active':'locked'}"></span><strong>${live?'Live daily report':'Finished daily report'}</strong><span class="tm-report-state ${live?'live':'locked'}">${live?'LIVE':'LOCKED'}</span></div>
-      <p>${live?'Updates automatically whenever inventory is initially received by Admin or the Inventory Manager records a receive or dispatch.':'This day is finished. Its report is read-only and preserved from the recorded transaction history.'}</p></div>
-      <div class="tm-last-update">Last transaction<br><strong>${escapeHtml(latest)}</strong></div>
-    </div>
+    <div class="tm-live-head"><div><div class="tm-live-title"><span class="tm-live-dot ${live?'active':'locked'}"></span><strong>${live?'Live daily report':'Finished daily report'}</strong><span class="tm-report-state ${live?'live':'locked'}">${live?'LIVE':'LOCKED'}</span></div><p>${live?'Updates automatically whenever inventory is initially received by Admin or the Inventory Manager records a receive or dispatch.':'This day is finished. Its report is read-only and preserved from the recorded transaction history.'}</p></div><div class="tm-last-update">Last transaction<br><strong>${escapeHtml(latest)}</strong></div></div>
     <div class="tm-live-summary tm-live-summary-compact"><div><span>Transactions</span><strong>${todayRows.length}</strong><small>Receiving & dispatch entries</small></div><div><span>Items moved</span><strong>${new Set(todayRows.map(r=>r.itemId)).size}</strong><small>Different goods</small></div></div>
     <div class="tm-live-table-wrap"><table class="tm-live-table"><thead><tr><th>Good</th><th>Opening</th><th>Received</th><th>Dispatched</th><th>Closing</th></tr></thead><tbody>${reports.map(x=>`<tr><td><strong>${escapeHtml(x.itemName)}</strong><small>${escapeHtml(x.unit)}</small></td><td>${formatQty(x.opening)} ${escapeHtml(x.unit)}</td><td class="tm-in">+${formatQty(x.received)} ${escapeHtml(x.unit)}</td><td class="tm-out">−${formatQty(x.dispatched)} ${escapeHtml(x.unit)}</td><td><strong>${formatQty(x.closing)} ${escapeHtml(x.unit)}</strong></td></tr>`).join('')||`<tr><td colspan="5"><div class="empty-team"><strong>No receiving or dispatch activity for this day.</strong><span>New activity will appear here automatically.</span></div></td></tr>`}</tbody></table></div>
-    <div class="tm-feed"><div class="tm-feed-head"><strong>Transaction feed</strong><span>${todayRows.length ? 'Newest activity first' : 'Waiting for activity'}</span></div>${todayRows.slice().sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0)).map(r=>{ const isReceive=isReceiveMovement(r); const actorEmail=String(r.byEmail||r.actorEmail||'').trim(); const actorRole=roleLabel(r.byRole||r.actorRole||''); const requester=r.requestId&&r.requestedByEmail?` · Requested by ${personRef(r.requestedByEmail,r.requestedByRole||'stock_requester',r.requestedByName||'')}`:''; const origin=transactionOriginShort(r); const when=formatDate(r.createdAt); const audit=(membership?.role==='transaction_manager'&&(r.editCount||r.editedAt||r.deleted))?`<button class="small-action audit-view-btn tm-feed-audit" data-open-revisions="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">View changes</button>`:''; return `<div class="tm-feed-row ${isReceive?'tm-feed-receive':'tm-feed-dispatch'}"><span class="tm-feed-type ${isReceive?'in':'out'}">${isReceive?'IN':'OUT'}</span><div class="tm-feed-main"><strong>${escapeHtml(r.itemName)} <span class="tm-origin-pill ${origin.toLowerCase().replace(/\s+/g,'-')}">${origin}</span></strong><span>${isReceive?'+':'−'}${formatQty(r.quantity)} ${escapeHtml(r.unit)}${r.department?` · ${escapeHtml(r.department)}`:''}</span><small>${escapeHtml(personRef(actorEmail,r.byRole||r.actorRole||'',r.byName||''))} · ${escapeHtml(when)}${requester}${r.editedAt?' · EDITED':''}${r.deleted?' · DELETED':''}</small></div>${audit}</div>`;}).join('')||'<div class="empty-team">No transactions recorded yet.</div>'}</div>
+    <div class="tm-feed"><div class="tm-feed-head"><strong>Transaction feed</strong><span>${todayRows.length ? 'Newest activity first' : 'Waiting for activity'}</span></div>${todayRows.slice().sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0)).map(r=>{const isReceive=isReceiveMovement(r);const actorEmail=String(r.byEmail||r.actorEmail||'').trim();const actorRole=roleLabel(r.byRole||r.actorRole||'');const requester=r.requestId&&r.requestedByEmail?` · Requested by ${personRef(r.requestedByEmail,r.requestedByRole||'stock_requester',r.requestedByName||'')}`:'';const origin=transactionOriginShort(r);const when=formatDate(r.createdAt);const audit=(membership?.role==='transaction_manager'&&(r.editCount||r.editedAt||r.deleted))?`<button class="small-action audit-view-btn tm-feed-audit" data-open-revisions="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">View changes</button>`:'';return `<div class="tm-feed-row ${isReceive?'tm-feed-receive':'tm-feed-dispatch'}"><span class="tm-feed-type ${isReceive?'in':'out'}">${isReceive?'IN':'OUT'}</span><div class="tm-feed-main"><strong>${escapeHtml(r.itemName)} <span class="tm-origin-pill ${origin.toLowerCase().replace(/\s+/g,'-')}">${origin}</span></strong><span>${isReceive?'+':'−'}${formatQty(r.quantity)} ${escapeHtml(r.unit)}${r.department?` · ${escapeHtml(r.department)}`:''}</span><small>${escapeHtml(personRef(actorEmail,r.byRole||r.actorRole||'',r.byName||''))} · ${escapeHtml(when)}${requester}${r.editedAt?' · EDITED':''}${r.deleted?' · DELETED':''}</small></div>${audit}</div>`;}).join('')||'<div class="empty-team">No transactions recorded yet.</div>'}</div>
     <div class="tm-lock-note">🔒 ${live?'Today remains live until the date changes. At midnight, this report becomes a finished locked record and the new day starts with the previous closing balances as its opening basis.':'This finished report is locked because the selected date has passed.'}</div>`;
-  target.querySelectorAll('[data-open-revisions]').forEach(btn=>btn.addEventListener('click',()=>{ const [itemId,movementId]=String(btn.dataset.openRevisions||'').split(':'); if(itemId&&movementId) openRevisionPage(itemId,movementId); }));
 }
 
 function revisionUrl(itemId,movementId){
@@ -2802,7 +3162,7 @@ async function renderRevisionPage(){
     render();
     return;
   }
-  root.innerHTML=`<div class="dashboard feature-page revision-page"><div class="topbar"><button class="back-btn" id="revision-page-back">‹ Back</button><div class="topbar-brand">Inventro</div></div><section class="feature-header"><p class="eyebrow">Audit trail</p><h1>Transaction changes</h1><p>Previous saved versions of this transaction are shown here. Use Android/browser Back to return to the exact History page.</p></section><section class="admin-card" id="revision-page-content"><div class="loading-screen"><div class="loading-orbit"><span></span><span></span><span></span></div><div class="loading-brand">Inventro</div><h2>Loading transaction changes</h2><p>Please wait while the audit record is loaded.</p></div></section></div>`;
+  root.innerHTML=`<div class="dashboard feature-page revision-page"><div class="topbar"><button class="back-btn" id="revision-page-back">‹ Back</button><div class="topbar-brand">Inventro</div></div><section class="feature-header"><p class="eyebrow">Audit trail</p><h1>Transaction changes</h1></section><section class="admin-card" id="revision-page-content"><div class="loading-screen"><div class="loading-orbit"><span></span><span></span><span></span></div><div class="loading-brand">Inventro</div><h2>Loading transaction changes</h2><p>Please wait while the audit record is loaded.</p></div></section></div>`;
   const leave=()=>{ history.back(); };
   root.querySelector('#revision-page-back').addEventListener('click',leave);
   try{
@@ -2837,24 +3197,31 @@ function canViewRevisionDetails(row){
 }
 
 async function renderHistory(forcedRole=null){
+  if(adminTmLiveRefreshTimer){ clearInterval(adminTmLiveRefreshTimer); adminTmLiveRefreshTimer=null; }
   const role=membership?.role||'';
   const isAdmin=role==='admin';
   const selectedRole=isAdmin ? (forcedRole || null) : (isStockRequesterRole(role) ? 'stock_requester' : role);
   const adminMenuOnly=isAdmin && !selectedRole;
+  const adminTmMenuOnly=isAdmin && selectedRole==='transaction_manager';
   const today=localDateKey();
   const currentEmail=(auth.currentUser?.email||'').toLowerCase();
   const selectedDayForLoad = document.querySelector('#history-day')?.value || today;
   let rows=[],departments=[],requestEvents=[],requestRecords=[],employees=[],error='';
   try{
-    rows=selectedRole && selectedDayForLoad && selectedDayForLoad !== today
-      ? await getMovementRowsForDay(selectedDayForLoad)
-      : await listHistory();
-    requestRecords=await listRequests();
-    departments=await listDepartments();
-    employees=await listEmployees();
-    if(role==='admin'||role==='inventory_manager'){
+    // Admin's Transaction Manager landing menu is only navigation. Do not pre-load
+    // movement/request/employee data here; doing unrelated reads could trigger a
+    // permission error before the Admin even chooses a workspace.
+    if(!adminTmMenuOnly) {
+      rows=selectedRole && selectedDayForLoad && selectedDayForLoad !== today
+        ? await getMovementRowsForDay(selectedDayForLoad)
+        : await listHistory();
+      requestRecords=await listRequests();
+      departments=await listDepartments();
+      employees=await listEmployees();
+    }
+    if(!adminTmMenuOnly && (role==='admin'||role==='inventory_manager')){
       requestEvents=await listRequestEvents();
-    }else{
+    }else if(!adminTmMenuOnly){
       // Request/Chef/TM history uses the parent request documents only.
       // This avoids permission failures from legacy/malformed event documents while
       // still showing the complete current request lifecycle.
@@ -2979,8 +3346,8 @@ async function renderHistory(forcedRole=null){
   }
 
   root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="history-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="history-refresh">↻ Refresh</button></div>
-    <section class="feature-header"><p class="eyebrow">Daily log book</p><h1>${adminMenuOnly?'History':'History · '+escapeHtml(roleLabel(selectedRole))}</h1><p>${adminMenuOnly?'Choose one history section. The selected section opens as its own clean workspace. Admin remains read-only.':selectedRole==='stock_requester'?'This workspace shows stock requests and the Inventory Manager fulfilments for your requests.':selectedRole==='inventory_manager'?'This workspace shows receiving, direct dispatch and dispatches made to fulfill stock requests.':selectedRole==='transaction_manager'?'This workspace shows the Inventory Manager live and finished daily transaction report day by day.':'This workspace shows Stock Requisitioner request activity and dispatched fulfilments.'}</p></section>
-    ${adminMenuOnly?`<section class="history-admin-menu" id="history-admin-menu"><button class="history-account-card" data-history-role="inventory_manager" type="button"><span>📦</span><strong>Inventory Manager</strong><small>Receiving, dispatch & request fulfilment</small></button><button class="history-account-card" data-history-role="stock_requester" type="button"><span>📝</span><strong>Stock Requisitioner</strong><small>Requests, approvals & dispatched fulfilments</small></button><button class="history-account-card" data-history-role="transaction_manager" type="button"><span>🧾</span><strong>Transaction Manager</strong><small>Transaction control & daily statements</small></button></section>`:`<section class="history-workspace" id="history-workspace">
+    <section class="feature-header"><p class="eyebrow">Daily log book</p><h1>${adminMenuOnly?'History':adminTmMenuOnly?'History · Transaction Manager':'History · '+escapeHtml(roleLabel(selectedRole))}</h1></section>
+    ${adminMenuOnly?`<section class="history-admin-menu" id="history-admin-menu"><button class="history-account-card" data-history-role="inventory_manager" type="button"><span>📦</span><strong>Inventory Manager</strong><small>Receiving, dispatch & request fulfilment</small></button><button class="history-account-card" data-history-role="stock_requester" type="button"><span>📝</span><strong>Stock Requisitioner</strong><small>Requests, approvals & dispatched fulfilments</small></button><button class="history-account-card" data-history-role="transaction_manager" type="button"><span>🧾</span><strong>Transaction Manager</strong><small>Transaction control & daily statements</small></button></section>`:adminTmMenuOnly?`<section class="history-admin-menu tm-history-submenu" id="tm-history-submenu"><button class="history-account-card" data-tm-history-action="order-list" type="button"><span>🛒</span><strong>Supplier Order Lists</strong><small>View what the Transaction Manager prepared for each day.</small></button><button class="history-account-card" data-tm-history-action="live-report" type="button"><span>⚡</span><strong>Live Daily Report</strong><small>View Inventory Manager receiving and dispatch activity.</small></button></section>`:`<section class="history-workspace" id="history-workspace">
       ${isAdmin?`<div class="history-workspace-bar"><button type="button" class="back-btn" id="history-menu-back">‹ History</button><strong id="history-workspace-title">${escapeHtml(roleLabel(selectedRole))} History</strong></div>`:''}
       <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><button class="small-action csv-btn" id="history-export-csv" type="button">📊 Download / Share CSV</button></section>
       ${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${selectedRole==='transaction_manager'?`<section class="admin-card tm-live-panel" id="history-live-panel"><div id="tm-live-report"></div></section>`:`<section class="admin-card" id="history-daily-panel"><div id="daily-statement" class="daily-statement" hidden></div><div id="history-list" class="history-list"></div></section>`}
@@ -3017,9 +3384,9 @@ async function renderHistory(forcedRole=null){
     const selectedDay=root.querySelector('#history-day')?.value||today;
     try {
       // Always hydrate the exact selected day before filtering. The live cache is
-      // intentionally only MOVEMENT_LIVE_DAYS days; older dates are fetched from
-      // the complete movement ledger on demand. This keeps every account wired to
-      // the same authoritative movement records instead of reusing yesterday's rows.
+      // intentionally only 7 days; older dates are fetched from the complete
+      // movement ledger on demand. This keeps every account wired to the same
+      // authoritative movement records instead of reusing yesterday's rows.
       rows = selectedDay===today ? await listHistory() : await getMovementRowsForDay(selectedDay);
       if(serial!==refreshSerial) return;
       let list=buildList();
@@ -3049,6 +3416,48 @@ async function renderHistory(forcedRole=null){
     root.querySelectorAll('[data-history-role]').forEach(btn=>btn.addEventListener('click',()=>navigateHistoryWorkspace(btn.dataset.historyRole)));
     root.querySelector('#history-back').addEventListener('click',()=>navigateBack('home'));
     root.querySelector('#history-refresh').addEventListener('click',()=>renderHistory());
+    return;
+  }
+  if(adminTmMenuOnly){
+    root.querySelectorAll('[data-tm-history-action]').forEach(btn=>btn.addEventListener('click',async()=>{
+      const action=btn.dataset.tmHistoryAction;
+      if(action==='order-list'){
+        // Admin is strictly view-only here. Inventory data is fetched only when a
+        // specific saved list is opened, and the builder renders all inputs disabled.
+        root.querySelector('#tm-history-submenu').innerHTML=`<div class="tm-admin-order-history-wrap"><div class="history-workspace-bar"><button type="button" class="back-btn" id="tm-admin-order-back">‹ Transaction Manager</button><strong>Supplier Order Lists</strong></div><div id="tm-admin-order-history-panel"></div></div>`;
+        await renderTransactionManagerOrderHistory(root.querySelector('#tm-admin-order-history-panel'));
+        root.querySelector('#tm-admin-order-back')?.addEventListener('click',()=>renderHistory('transaction_manager'));
+      }else{
+        // Admin view: keep the report read-only and load the requested date directly
+        // from Firestore. Nothing here relies on the Transaction Manager cache.
+        root.querySelector('#tm-history-submenu').innerHTML=`<div class="tm-admin-live-wrap"><div class="history-workspace-bar"><button type="button" class="back-btn" id="tm-admin-live-back">‹ Transaction Manager</button><strong>Live Daily Report</strong><button type="button" class="refresh-btn" id="tm-admin-live-refresh">↻ Refresh</button></div><section class="history-tools tm-date-selector"><div><label for="tm-admin-live-day">Date</label><input id="tm-admin-live-day" type="date" value="${today}" max="${today}"></div></section><section class="admin-card tm-live-panel"><div id="tm-admin-live-report"></div></section></div>`;
+        const destination=root.querySelector('#tm-admin-live-report');
+        const dateInput=root.querySelector('#tm-admin-live-day');
+        const loadAdminLiveReport=async({silent=false}={})=>{
+          if(!destination) return;
+          if(!silent) destination.innerHTML='<div class="loading-inline">Loading…</div>';
+          try{
+            const selectedDay=dateInput?.value||today;
+            const [items,dayRows]=await Promise.all([
+              listItems(true),
+              getMovementRowsForDayOnCall(selectedDay)
+            ]);
+            renderTransactionManagerLiveReport(root,dayRows,selectedDay,{items,target:destination});
+          }catch(err){
+            destination.innerHTML=`<div class="error-box">${escapeHtml(friendlyError(err))}</div>`;
+          }
+        };
+        dateInput?.addEventListener('change',()=>loadAdminLiveReport());
+        root.querySelector('#tm-admin-live-refresh')?.addEventListener('click',()=>loadAdminLiveReport());
+        root.querySelector('#tm-admin-live-back')?.addEventListener('click',()=>renderHistory('transaction_manager'));
+        await loadAdminLiveReport();
+        adminTmLiveRefreshTimer=setInterval(()=>{
+          if(dateInput?.value===localDateKey()) loadAdminLiveReport({silent:true});
+        },5000);
+      }
+    }));
+    root.querySelector('#history-back').addEventListener('click',()=>navigateHistoryMenuBack());
+    root.querySelector('#history-refresh').addEventListener('click',()=>renderHistory('transaction_manager'));
     return;
   }
   root.querySelector('#history-type')?.addEventListener('change',()=>{refreshList();});
@@ -3087,16 +3496,52 @@ function quantitySummary(rows){
   return {value:formatQty(parts.reduce((a,[,q])=>a+q,0)), detail:`Mixed units · ${parts.map(([u,q])=>`${formatQty(q)} ${u}`).join(' · ')}`};
 }
 
+async function getStatsMovementRowsOnCall(){
+  const today=localDateKey();
+  const yesterdayDate=new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate()-1);
+  const yesterday=localDateKey(yesterdayDate);
+  const [todayRows,yesterdayRows]=await Promise.all([
+    getMovementRowsForDayOnCall(today),
+    getMovementRowsForDayOnCall(yesterday)
+  ]);
+  return [...todayRows,...yesterdayRows];
+}
+
+async function getStatsRequestsOnCall(){
+  const companyId=currentCompanyId();
+  if(!companyId) return [];
+  const base=collection(db,'companies',companyId,'requests');
+  const isCompanyWide=['admin','inventory_manager'].includes(normalizedRole(membership?.role));
+  const ownUid=auth.currentUser?.uid||'';
+  const startDate=new Date();
+  startDate.setHours(0,0,0,0);
+  startDate.setDate(startDate.getDate()-1);
+  const createdQ=isCompanyWide
+    ? query(base,where('createdAt','>=',startDate))
+    : query(base,where('requestedByUid','==',ownUid),where('createdAt','>=',startDate));
+  const updatedQ=isCompanyWide
+    ? query(base,where('updatedAt','>=',startDate))
+    : query(base,where('requestedByUid','==',ownUid),where('updatedAt','>=',startDate));
+  const [createdSnap,updatedSnap]=await Promise.all([getDocs(createdQ),getDocs(updatedQ)]);
+  const byId=new Map();
+  [createdSnap,updatedSnap].forEach(snap=>snap.docs.forEach(d=>byId.set(d.id,{id:d.id,...d.data()})));
+  return [...byId.values()].sort((a,b)=>
+    (b.updatedAt?.toMillis?.()||b.createdAt?.toMillis?.()||0)-
+    (a.updatedAt?.toMillis?.()||a.createdAt?.toMillis?.()||0)
+  );
+}
+
 async function renderStats(){
   let items=[],rows=[],requests=[],error='';
   try{
-    items=await listItems();
-    rows=await listHistory();
-    const statsStart=movementLiveStartDate().getTime();
-    rows=rows.filter(r=>movementMillis(r)>=statsStart);
-    requests=await listRequests();
-    const statsStartDate=movementLiveStartDate().getTime();
-    requests=requests.filter(r=>(r.updatedAt?.toMillis?.()||r.createdAt?.toMillis?.()||0)>=statsStartDate);
+    // Stats deliberately use on-call reads only: exactly today + yesterday.
+    // They do not depend on the realtime movement/request caches.
+    [items,rows,requests]=await Promise.all([
+      listItems(),
+      getStatsMovementRowsOnCall(),
+      getStatsRequestsOnCall()
+    ]);
   }
   catch(err){error=friendlyError(err);}
   const role=membership?.role||'';
@@ -3129,32 +3574,26 @@ async function renderStats(){
     {label:'Good stock',value:items.filter(i=>Number(i.quantity||0)>Number(i.lowStockAlert||0)).length},
     {label:'Low stock',value:lowItems.length}
   ].filter(x=>x.value>0);
-  // Stats are intentionally limited to MOVEMENT_LIVE_DAYS calendar days — the
-  // same window the movement rows above were already filtered to. The chart
-  // below follows that same constant instead of a hardcoded day count, so it
-  // never labels a day as covered when the underlying rows don't actually
-  // include it (variable names below say "sevenDay" for historical reasons;
-  // they hold MOVEMENT_LIVE_DAYS days' worth of data, whatever that is set to).
-  // Build a simple daily receive/dispatch chart from the already-filtered rows.
+  // Stats use exactly the last 2 calendar dates: today + yesterday.
   const dayMs=86400000;
   const startOfToday=(()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth(),n.getDate());})();
   const dayKey=(d)=>localDateKey(d);
   const sumForDay=(source,day)=>source.reduce((a,r)=>{const d=r.createdAt?.toDate?.()||new Date(r.createdAt||0);return dayKey(d)===day?a+Number(r.quantity||0):a;},0);
-  const sevenDayLabels=[];
-  const sevenDayReceived=[];
-  const sevenDayDispatched=[];
-  for(let i=MOVEMENT_LIVE_DAYS-1;i>=0;i--){
+  const twoDayLabels=[];
+  const twoDayReceived=[];
+  const twoDayDispatched=[];
+  for(let i=1;i>=0;i--){
     const d=new Date(startOfToday.getTime()-i*dayMs);
     const key=dayKey(d);
-    sevenDayLabels.push(i===0?'Today':d.toLocaleDateString(undefined,{weekday:'short',day:'numeric'}));
-    sevenDayReceived.push(sumForDay(received,key));
-    sevenDayDispatched.push(sumForDay(dispatched,key));
+    twoDayLabels.push(i===0?'Today':d.toLocaleDateString(undefined,{weekday:'short',day:'numeric'}));
+    twoDayReceived.push(sumForDay(received,key));
+    twoDayDispatched.push(sumForDay(dispatched,key));
   }
   const receivedSummary=quantitySummary(received);
   const dispatchedSummary=quantitySummary(dispatched);
   const roleTitle=role==='admin'?'Company-wide':roleLabel(role);
   const roleDesc={admin:'Company-wide inventory and transaction insights.',inventory_manager:'Your receiving, dispatch and request-workflow insights.',transaction_manager:'Inventory Manager transactions plus your own request activity.',stock_requester:'Your stock requests and fulfilled-dispatch activity.',chef:'Your stock requests and fulfilled-dispatch activity.',request:'Your stock requests and fulfilled-dispatch activity.'}[role]||'Your inventory activity and insights.';
-  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1><p>${escapeHtml(roleDesc)} Activity cards and transaction charts use the last ${MOVEMENT_LIVE_DAYS} day${MOVEMENT_LIVE_DAYS===1?'':'s'}.</p></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
+  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
   <div class="stat-grid stats-summary">
     <div class="stat-card"><strong>${items.length}</strong><span>Total items</span></div>
     <div class="stat-card"><strong>${received.length}</strong><span>Receive transactions</span></div>
@@ -3167,11 +3606,11 @@ async function renderStats(){
     <div class="stat-card"><strong>${fulfilledReq.length}</strong><span>Dispatched requests</span></div>
     <div class="stat-card ${rejectedReq.length?'danger':''}"><strong>${rejectedReq.length}</strong><span>Rejected requests</span></div>
   </div>
-  <section class="admin-card"><div class="admin-card-title"><div><h2>Key performance charts</h2><p>Charts are filtered to the signed-in role where applicable.</p></div></div>
+  <section class="admin-card"><div class="admin-card-title"><div><h2>Key performance charts</h2></div></div>
     <div class="chart-grid stats-chart-grid">
       <div class="chart-card"><h3>📊 Top 8 items · dispatched vs received</h3><canvas id="stats-top8"></canvas></div>
       <div class="chart-card"><h3>🥧 Current stock health</h3><canvas id="stats-stock-health"></canvas></div>
-      <div class="chart-card"><h3>📈 Last ${MOVEMENT_LIVE_DAYS} day${MOVEMENT_LIVE_DAYS===1?'':'s'}</h3><canvas id="stats-week-compare"></canvas></div>
+      <div class="chart-card"><h3>📈 Last 2 days</h3><canvas id="stats-week-compare"></canvas></div>
     </div>
   </section></div>`;
   if(!window.Chart){await new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';sc.onload=resolve;sc.onerror=reject;document.head.appendChild(sc);}).catch(()=>{});}
@@ -3179,7 +3618,7 @@ async function renderStats(){
     const top8Canvas=root.querySelector('#stats-top8');
     if(top8Canvas) new Chart(top8Canvas,{type:'bar',data:{labels:combinedTop8.map(x=>x.name),datasets:[{label:'Dispatched',data:combinedTop8.map(x=>x.dispatched)},{label:'Received',data:combinedTop8.map(x=>x.received)}]},options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{x:{beginAtZero:true}}}});
     new Chart(root.querySelector('#stats-stock-health'),{type:'doughnut',data:{labels:statusPie.map(x=>x.label),datasets:[{data:statusPie.map(x=>x.value)}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}}}});
-    new Chart(root.querySelector('#stats-week-compare'),{type:'bar',data:{labels:sevenDayLabels,datasets:[{label:'Received',data:sevenDayReceived},{label:'Dispatched',data:sevenDayDispatched}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
+    new Chart(root.querySelector('#stats-week-compare'),{type:'bar',data:{labels:twoDayLabels,datasets:[{label:'Received',data:twoDayReceived},{label:'Dispatched',data:twoDayDispatched}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
   }
   root.querySelector('#stats-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#stats-refresh').addEventListener('click',()=>renderStats());
 }
@@ -3189,7 +3628,7 @@ function openInventoryEditModal(item,onSave){
   closeInventoryEditModal();
   const overlay=document.createElement('div'); overlay.id='inventory-edit-modal'; overlay.className='modal-overlay inventory-edit-overlay';
   overlay.innerHTML=`<div class="inventory-edit-modal" role="dialog" aria-modal="true" aria-labelledby="inventory-edit-title">
-    <div class="inventory-edit-header"><div><p class="eyebrow">Inventory setup</p><h2 id="inventory-edit-title">Edit inventory item</h2><p>Update the saved item just like adding a new item. Current stock will not change.</p></div><button type="button" class="modal-close" id="inventory-edit-close" aria-label="Close">×</button></div>
+    <div class="inventory-edit-header"><div><p class="eyebrow">Inventory setup</p><h2 id="inventory-edit-title">Edit inventory item</h2></div><button type="button" class="modal-close" id="inventory-edit-close" aria-label="Close">×</button></div>
     <div class="inventory-edit-body">
       <div class="field"><label for="inventory-edit-name">Item name</label><input id="inventory-edit-name" type="text" maxlength="80" value="${escapeHtml(item.name||'')}" placeholder="e.g. Basmati Rice"></div>
       <div class="field"><label for="inventory-edit-unit">Unit</label><select id="inventory-edit-unit">${INVENTORY_UNITS.map(u=>`<option value="${escapeHtml(u)}" ${u===item.unit?'selected':''}>${escapeHtml(u)}</option>`).join('')}</select></div>
@@ -3236,7 +3675,7 @@ async function renderAdmin() {
     activeTab = tab;
     adminActiveTab = tab;
     if (!activeTab) {
-      root.innerHTML = `<div class="dashboard admin-page admin-menu-only"><div class="topbar"><button class="back-btn" id="admin-back">‹ Back to workspace</button><div class="topbar-brand">Inventro</div><div class="user-pill"><div class="avatar">${escapeHtml((user?.displayName?.[0] || 'A').toUpperCase())}</div><div class="user-email">${escapeHtml(user?.email || '')}</div></div></div><section class="admin-header"><p class="eyebrow">Administration</p><h1>Admin Center</h1><p>Choose one area to manage. Each section opens on its own clean workspace.</p></section><div class="admin-menu-grid"><button class="admin-menu-card" data-admin-tab="team"><span>👥</span><strong>Team Management</strong><small>Employees, roles & access days</small></button><button class="admin-menu-card" data-admin-tab="inventory"><span>📦</span><strong>Inventory Setup</strong><small>Add, edit and configure goods</small></button><button class="admin-menu-card" data-admin-tab="departments"><span>🏢</span><strong>Departments</strong><small>Manage departments used by the kitchen</small></button><button class="admin-menu-card" data-admin-tab="company"><span>⚙️</span><strong>Company Controls</strong><small>Company information and access code</small></button></div></div>`;
+      root.innerHTML = `<div class="dashboard admin-page admin-menu-only"><div class="topbar"><button class="back-btn" id="admin-back">‹ Back to workspace</button><div class="topbar-brand">Inventro</div><div class="user-pill"><div class="avatar">${escapeHtml((user?.displayName?.[0] || 'A').toUpperCase())}</div><div class="user-email">${escapeHtml(user?.email || '')}</div></div></div><section class="admin-header"><p class="eyebrow">Administration</p><h1>Admin Center</h1></section><div class="admin-menu-grid"><button class="admin-menu-card" data-admin-tab="team"><span>👥</span><strong>Team Management</strong></button><button class="admin-menu-card" data-admin-tab="inventory"><span>📦</span><strong>Inventory Setup</strong></button><button class="admin-menu-card" data-admin-tab="departments"><span>🏢</span><strong>Departments</strong></button><button class="admin-menu-card" data-admin-tab="company"><span>⚙️</span><strong>Company Controls</strong><small>Company information and access code</small></button></div></div>`;
       root.querySelector('#admin-back').addEventListener('click',()=>navigateBack('home'));
       root.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.addEventListener('click',()=>{
         const tab = btn.dataset.adminTab;
@@ -3259,7 +3698,7 @@ async function renderAdmin() {
         <section class="admin-header">
           <p class="eyebrow">Administration</p>
           <h1>Admin Center</h1>
-          <p>Manage your team, inventory setup, and company controls from one organized workspace.</p>
+          
         </section>
 
         <style>
@@ -3291,11 +3730,11 @@ async function renderAdmin() {
           <div class="admin-section-label">Team management</div>
           <section class="admin-card">
             <div class="admin-card-title">
-              <div><h2>Add employee</h2><p>The employee must use this exact Google email and your company's 6-digit code to join.</p></div>
+              <div><h2>Add employee</h2></div>
             </div>
             <div class="field"><label for="employee-email">Employee Gmail</label><input type="text" id="employee-email" placeholder="employee@gmail.com" autocomplete="off" /></div>
             <div class="field"><label for="employee-role">Role</label><select id="employee-role"><option value="inventory_manager">Inventory Manager</option><option value="transaction_manager">Transaction Manager</option><option value="stock_requester">Stock Requisitioner</option></select></div>
-            <div class="field"><label>Login access days</label><div class="day-grid">${WEEK_DAYS.map(([key, label]) => `<label class="day-option"><input type="checkbox" value="${key}" checked /><span>${label.slice(0, 3)}</span></label>`).join('')}</div><p class="helper-text">On an unchecked day, this employee will not be allowed to enter the company workspace.</p></div>
+            <div class="field"><label>Login access days</label><div class="day-grid">${WEEK_DAYS.map(([key, label]) => `<label class="day-option"><input type="checkbox" value="${key}" checked /><span>${label.slice(0, 3)}</span></label>`).join('')}</div></div>
             ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
             <button class="btn btn-primary" id="add-employee-btn" ${loading ? 'disabled' : ''}>${loading ? '<span class="spinner spinner-dark"></span> Loading team…' : 'Add employee'}</button>
           </section>
@@ -3319,20 +3758,20 @@ async function renderAdmin() {
         <div class="admin-panel ${activeTab === 'inventory' ? 'active' : ''}" data-admin-panel="inventory">
           <div class="admin-section-label">Inventory setup</div>
           <section class="admin-card admin-inventory-card">
-            <div class="admin-card-title"><div><h2>➕ Add inventory item</h2><p>Only the company Admin can create new stock items.</p></div></div>
+            <div class="admin-card-title"><div><h2>➕ Add inventory item</h2></div></div>
             <div class="field"><label for="admin-item-name">Item name</label><input id="admin-item-name" type="text" placeholder="e.g. Basmati Rice" maxlength="80"></div>
             <div class="field"><label for="admin-item-unit">Unit</label><select id="admin-item-unit">${INVENTORY_UNITS.map(u => `<option value="${u}">${u}</option>`).join('')}</select></div>
-            <div class="two-fields"><div class="field"><label for="admin-opening-stock">Opening stock</label><input id="admin-opening-stock" type="number" min="0" step="0.01" value="0"></div><div class="field"><label for="admin-low-stock">Low stock alert</label><input id="admin-low-stock" type="number" min="0" step="0.01" value="0"></div></div>
+            <div class="two-fields"><div class="field"><label>Opening stock</label><div id="admin-opening-stock-fields" class="quantity-fields-host">${quantityFieldsHtml('admin-opening','kg')}</div></div><div class="field"><label>Low stock alert</label><div id="admin-low-stock-fields" class="quantity-fields-host">${quantityFieldsHtml('admin-low','kg')}</div></div></div>
             <div class="image-preview-box"><div class="preview-placeholder">🖼️</div><div><strong>Automatic item photo</strong><span>Inventro will try to find an image when you save the item.</span></div></div>
             <button class="btn btn-primary" id="admin-save-item" type="button">Save inventory item</button><div id="admin-item-message"></div>
           </section>
-          <section class="admin-card"><div class="admin-card-title"><div><h2>Inventory permissions</h2><p>Item creation is restricted to this Admin section. Inventory Manager can operate stock without adding new item definitions.</p></div></div><div class="admin-info-grid"><div class="admin-info-box"><span>Item creation</span><strong>Admin only</strong></div><div class="admin-info-box"><span>Stock operations</span><strong>Admin + Inventory Manager</strong></div></div></section><section class="admin-card"><div class="admin-card-title"><div><h2>✏️ Edit saved inventory</h2><p>Change the saved item name, unit or low-stock threshold. Current stock is not changed here.</p></div></div><div class="admin-item-search-wrap"><span>⌕</span><input id="admin-item-search" type="search" placeholder="Search saved goods by name…" autocomplete="off"></div><div id="admin-edit-items" class="admin-edit-items"></div></section>
+          <section class="admin-card"><div class="admin-card-title"><div><h2>Inventory permissions</h2></div></div><div class="admin-info-grid"><div class="admin-info-box"><span>Item creation</span><strong>Admin only</strong></div><div class="admin-info-box"><span>Stock operations</span><strong>Admin + Inventory Manager</strong></div></div></section><section class="admin-card"><div class="admin-card-title"><div><h2>✏️ Edit saved inventory</h2></div></div><div class="admin-item-search-wrap"><span>⌕</span><input id="admin-item-search" type="search" placeholder="Search saved goods by name…" autocomplete="off"></div><div id="admin-edit-items" class="admin-edit-items"></div></section>
         </div>
 
         <div class="admin-panel ${activeTab === 'departments' ? 'active' : ''}" data-admin-panel="departments">
           <div class="admin-section-label">Department setup</div>
           <section class="admin-card">
-            <div class="admin-card-title"><div><h2>🏢 Add department</h2><p>Departments appear in Inventory Manager dispatch and Stock Requisitioner requests.</p></div></div>
+            <div class="admin-card-title"><div><h2>🏢 Add department</h2></div></div>
             <div class="field"><label for="department-name">Department name</label><input id="department-name" type="text" maxlength="60" placeholder="e.g. Main Kitchen"></div>
             <button class="btn btn-primary" id="add-department-btn" type="button">Add department</button>
           </section>
@@ -3342,16 +3781,16 @@ async function renderAdmin() {
         <div class="admin-panel ${activeTab === 'company' ? 'active' : ''}" data-admin-panel="company">
           <div class="admin-section-label">Company controls</div>
           <section class="admin-card">
-            <div class="admin-card-title"><div><h2>Company information</h2><p>Company identity and secure access details.</p></div></div>
+            <div class="admin-card-title"><div><h2>Company information</h2></div></div>
             <div class="admin-info-grid"><div class="admin-info-box"><span>Company</span><strong>${escapeHtml(membership?.companyName || '—')}</strong></div><div class="admin-info-box"><span>Your role</span><strong>Admin</strong></div><div class="admin-info-box"><span>Admin email</span><strong>${escapeHtml(user?.email || '—')}</strong></div><div class="admin-info-box"><span>Company ID</span><strong>${escapeHtml(membership?.companyId || '—')}</strong></div></div>
             <div class="company-code-box"><div><span>6-digit company code</span><strong id="company-code-display">••••••</strong></div><button class="small-action" id="toggle-company-code" type="button" aria-label="Show company code">👁</button></div>
             <div class="company-control-actions">
               <button class="btn btn-secondary" id="change-company-code-btn" type="button">🔄 Change company code</button>
-              <p class="helper-text">Changing the code signs every employee out. They must sign in again and enter the new 6-digit code.</p>
+              
             </div>
           </section>
           <section class="admin-card admin-danger-card">
-            <div class="admin-card-title"><div><h2>Danger zone</h2><p>Delete the entire company and its stored inventory, transactions, requests and team membership records.</p></div></div>
+            <div class="admin-card-title"><div><h2>Danger zone</h2></div></div>
             <button class="btn btn-danger" id="delete-company-admin-btn" type="button">Delete company</button>
           </section>
         </div>
@@ -3411,17 +3850,22 @@ async function renderAdmin() {
     renderAdminEditItems();
     adminItemSearch?.addEventListener('input',()=>renderAdminEditItems(adminItemSearch.value));
 
+    const adminUnitSelect=root.querySelector('#admin-item-unit');adminUnitSelect?.addEventListener('change',()=>{const unit=adminUnitSelect.value;root.querySelector('#admin-opening-stock-fields').innerHTML=quantityFieldsHtml('admin-opening',unit);root.querySelector('#admin-low-stock-fields').innerHTML=quantityFieldsHtml('admin-low',unit);});
+
     const saveItemBtn = root.querySelector('#admin-save-item');
     saveItemBtn?.addEventListener('click', async () => {
       saveItemBtn.disabled = true;
       saveItemBtn.innerHTML = '<span class="spinner spinner-dark"></span> Finding image & saving…';
       const msg = root.querySelector('#admin-item-message');
       try {
-        await createInventoryItem({ name: root.querySelector('#admin-item-name').value, unit: root.querySelector('#admin-item-unit').value, openingStock: root.querySelector('#admin-opening-stock').value, lowStockAlert: root.querySelector('#admin-low-stock').value });
+        const unit = root.querySelector('#admin-item-unit').value;
+        const openingStock = readQuantityFields('admin-opening',unit,{allowZero:true});
+        const lowStockAlert = readQuantityFields('admin-low',unit,{allowZero:true});
+        await createInventoryItem({ name: root.querySelector('#admin-item-name').value, unit, openingStock, lowStockAlert });
         msg.innerHTML = '<div class="success-box">Item added successfully. You can view it in Stock.</div>';
         root.querySelector('#admin-item-name').value = '';
-        root.querySelector('#admin-opening-stock').value = '0';
-        root.querySelector('#admin-low-stock').value = '0';
+        root.querySelector('#admin-opening-stock-fields').innerHTML = quantityFieldsHtml('admin-opening',unit);
+        root.querySelector('#admin-low-stock-fields').innerHTML = quantityFieldsHtml('admin-low',unit);
       } catch (err) {
         msg.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(err))}</div>`;
       } finally {
@@ -3480,9 +3924,52 @@ async function renderAdmin() {
 
 // ---------------- router ----------------
 // Which Admin Center sub-section (team/inventory/departments/company) is
+async function renderTransactionManagerOrderPage() {
+  if(membership?.role!=='transaction_manager'){ navigate('home'); return; }
+  const today=localDateKey();
+  root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="tm-order-page-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="tm-order-page-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Procurement</p><h1>Make Order List</h1></section><section class="history-tools tm-date-selector"><div><label for="tm-order-page-day">Date</label><input id="tm-order-page-day" type="date" value="${today}" max="${today}"></div></section><div id="tm-order-page-content"></div></div>`;
+  const target=root.querySelector('#tm-order-page-content');
+  const dateInput=root.querySelector('#tm-order-page-day');
+  const load=async()=>{
+    const day=dateInput?.value||today;
+    if(day>today){ showTemporaryMessage('Choose today or an earlier date.','error'); return; }
+    target.innerHTML='<div class="loading-inline">Loading order list…</div>';
+    try{ const items=await listItems(true); await renderDailyOrderListBuilder(target,day,items); }
+    catch(err){target.innerHTML=`<div class="error-box">${escapeHtml(friendlyError(err))}</div>`;}
+  };
+  dateInput?.addEventListener('change',load);
+  root.querySelector('#tm-order-page-back').addEventListener('click',()=>navigateBack('home'));
+  root.querySelector('#tm-order-page-refresh').addEventListener('click',load);
+  await load();
+}
+
+async function renderTransactionManagerLiveReportPage() {
+  if(membership?.role!=='transaction_manager'){ navigate('home'); return; }
+  const today=localDateKey();
+  root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="tm-live-page-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="tm-live-page-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Transaction Manager</p><h1>Live Daily Report</h1></section><section class="history-workspace"><section class="history-tools"><div><label for="tm-live-page-day">Date</label><input id="tm-live-page-day" type="date" value="${today}"></div><div><label for="tm-live-page-type">Activity</label><select id="tm-live-page-type"><option value="all">All transaction activity</option><option value="received">Received items</option><option value="dispatched">Dispatched items</option></select></div><div><label for="tm-live-page-department">Department</label><select id="tm-live-page-department"><option value="all">All departments</option></select></div></section><section class="admin-card tm-live-panel" id="tm-live-page-panel"><div id="tm-live-report"></div></section></section></div>`;
+  const items=await listItems();
+  const departments=await listDepartments();
+  const dep=root.querySelector('#tm-live-page-department');
+  dep.innerHTML='<option value="all">All departments</option>'+departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('');
+  const refresh=async()=>{
+    const day=root.querySelector('#tm-live-page-day')?.value||today;
+    const activity=root.querySelector('#tm-live-page-type')?.value||'all';
+    const department=root.querySelector('#tm-live-page-department')?.value||'all';
+    const rows=day===localDateKey()?await listHistory():await getMovementRowsForDay(day);
+    renderTransactionManagerLiveReport(root,rows,day,{items,activity:activity==='received'?'receive':activity==='dispatched'?'dispatch':'all',department});
+  };
+  root.querySelector('#tm-live-page-day').addEventListener('change',refresh);
+  root.querySelector('#tm-live-page-type').addEventListener('change',refresh);
+  root.querySelector('#tm-live-page-department').addEventListener('change',refresh);
+  root.querySelector('#tm-live-page-back').addEventListener('click',()=>navigateBack('home'));
+  root.querySelector('#tm-live-page-refresh').addEventListener('click',refresh);
+  await refresh();
+}
+
 // currently open, if any. Kept outside renderAdmin() so the Android/browser
 // back button can restore it correctly instead of falling through to Home.
 let adminActiveTab = null;
+let adminTmLiveRefreshTimer = null;
 
 let view = 'loading', membership = null, justCreatedCode = null, returnToJoinAfterSignOut = false;
 
@@ -3532,6 +4019,12 @@ function render() {
       break;
     case 'stats':
       renderStats();
+      break;
+    case 'tm-order-list':
+      renderTransactionManagerOrderPage();
+      break;
+    case 'tm-live-report':
+      renderTransactionManagerLiveReportPage();
       break;
     case 'history':
     case 'logbook':
