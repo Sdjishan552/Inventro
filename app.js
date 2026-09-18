@@ -1626,7 +1626,7 @@ let homeStatusUnsubscribe = null;
 // Global real-time synchronization.  These listeners stay alive for the whole
 // signed-in company session so pages never depend on a manual Refresh button.
 let realtimeUnsubscribers = [];
-const MOVEMENT_LIVE_DAYS = 3;
+const MOVEMENT_LIVE_DAYS = 2;
 let realtimeMovementUnsubs = new Map();
 let realtimeMovementCache = new Map();
 let fullMovementCache = new Map();
@@ -3017,9 +3017,9 @@ async function renderHistory(forcedRole=null){
     const selectedDay=root.querySelector('#history-day')?.value||today;
     try {
       // Always hydrate the exact selected day before filtering. The live cache is
-      // intentionally only 7 days; older dates are fetched from the complete
-      // movement ledger on demand. This keeps every account wired to the same
-      // authoritative movement records instead of reusing yesterday's rows.
+      // intentionally only MOVEMENT_LIVE_DAYS days; older dates are fetched from
+      // the complete movement ledger on demand. This keeps every account wired to
+      // the same authoritative movement records instead of reusing yesterday's rows.
       rows = selectedDay===today ? await listHistory() : await getMovementRowsForDay(selectedDay);
       if(serial!==refreshSerial) return;
       let list=buildList();
@@ -3129,7 +3129,12 @@ async function renderStats(){
     {label:'Good stock',value:items.filter(i=>Number(i.quantity||0)>Number(i.lowStockAlert||0)).length},
     {label:'Low stock',value:lowItems.length}
   ].filter(x=>x.value>0);
-  // Stats are intentionally limited to the last 7 calendar days.
+  // Stats are intentionally limited to MOVEMENT_LIVE_DAYS calendar days — the
+  // same window the movement rows above were already filtered to. The chart
+  // below follows that same constant instead of a hardcoded day count, so it
+  // never labels a day as covered when the underlying rows don't actually
+  // include it (variable names below say "sevenDay" for historical reasons;
+  // they hold MOVEMENT_LIVE_DAYS days' worth of data, whatever that is set to).
   // Build a simple daily receive/dispatch chart from the already-filtered rows.
   const dayMs=86400000;
   const startOfToday=(()=>{const n=new Date();return new Date(n.getFullYear(),n.getMonth(),n.getDate());})();
@@ -3138,7 +3143,7 @@ async function renderStats(){
   const sevenDayLabels=[];
   const sevenDayReceived=[];
   const sevenDayDispatched=[];
-  for(let i=6;i>=0;i--){
+  for(let i=MOVEMENT_LIVE_DAYS-1;i>=0;i--){
     const d=new Date(startOfToday.getTime()-i*dayMs);
     const key=dayKey(d);
     sevenDayLabels.push(i===0?'Today':d.toLocaleDateString(undefined,{weekday:'short',day:'numeric'}));
@@ -3149,7 +3154,7 @@ async function renderStats(){
   const dispatchedSummary=quantitySummary(dispatched);
   const roleTitle=role==='admin'?'Company-wide':roleLabel(role);
   const roleDesc={admin:'Company-wide inventory and transaction insights.',inventory_manager:'Your receiving, dispatch and request-workflow insights.',transaction_manager:'Inventory Manager transactions plus your own request activity.',stock_requester:'Your stock requests and fulfilled-dispatch activity.',chef:'Your stock requests and fulfilled-dispatch activity.',request:'Your stock requests and fulfilled-dispatch activity.'}[role]||'Your inventory activity and insights.';
-  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1><p>${escapeHtml(roleDesc)} Activity cards and transaction charts use the last 7 days.</p></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
+  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1><p>${escapeHtml(roleDesc)} Activity cards and transaction charts use the last ${MOVEMENT_LIVE_DAYS} day${MOVEMENT_LIVE_DAYS===1?'':'s'}.</p></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
   <div class="stat-grid stats-summary">
     <div class="stat-card"><strong>${items.length}</strong><span>Total items</span></div>
     <div class="stat-card"><strong>${received.length}</strong><span>Receive transactions</span></div>
@@ -3166,7 +3171,7 @@ async function renderStats(){
     <div class="chart-grid stats-chart-grid">
       <div class="chart-card"><h3>📊 Top 8 items · dispatched vs received</h3><canvas id="stats-top8"></canvas></div>
       <div class="chart-card"><h3>🥧 Current stock health</h3><canvas id="stats-stock-health"></canvas></div>
-      <div class="chart-card"><h3>📈 Last 7 days</h3><canvas id="stats-week-compare"></canvas></div>
+      <div class="chart-card"><h3>📈 Last ${MOVEMENT_LIVE_DAYS} day${MOVEMENT_LIVE_DAYS===1?'':'s'}</h3><canvas id="stats-week-compare"></canvas></div>
     </div>
   </section></div>`;
   if(!window.Chart){await new Promise((resolve,reject)=>{const sc=document.createElement('script');sc.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js';sc.onload=resolve;sc.onerror=reject;document.head.appendChild(sc);}).catch(()=>{});}
