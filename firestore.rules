@@ -1,0 +1,402 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function myUid() { return request.auth.uid; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function companyPath(companyId) { return /databases/$(database)/documents/companies/$(companyId); }
+    function employeePath(companyId, emailKey) { return /databases/$(database)/documents/companies/$(companyId)/employees/$(emailKey); }
+    function myEmployeePath(companyId) { return employeePath(companyId, myEmail()); }
+    function myEmployeeExists(companyId) { return signedIn() && exists(myEmployeePath(companyId)); }
+
+    function isOwnerOf(companyId) {
+      return signedIn() && exists(companyPath(companyId)) && get(companyPath(companyId)).data.ownerUid == myUid();
+    }
+
+    function isActiveMemberOf(companyId) {
+      return signedIn() && myEmployeeExists(companyId)
+        && get(myEmployeePath(companyId)).data.uid == myUid()
+        && get(myEmployeePath(companyId)).data.status == 'active';
+    }
+
+    function isAdminOf(companyId) {
+      return signedIn() && myEmployeeExists(companyId)
+        && get(myEmployeePath(companyId)).data.uid == myUid()
+        && get(myEmployeePath(companyId)).data.role == 'admin'
+        && get(myEmployeePath(companyId)).data.status == 'active';
+    }
+
+    function isInventoryManagerOf(companyId) {
+      return signedIn() && myEmployeeExists(companyId)
+        && get(myEmployeePath(companyId)).data.uid == myUid()
+        && get(myEmployeePath(companyId)).data.role == 'inventory_manager'
+        && get(myEmployeePath(companyId)).data.status == 'active';
+    }
+
+    function isRequestCreatorRole(companyId) {
+      return signedIn() && myEmployeeExists(companyId)
+        && get(myEmployeePath(companyId)).data.uid == myUid()
+        && get(myEmployeePath(companyId)).data.status == 'active'
+        && get(myEmployeePath(companyId)).data.role in ['inventory_manager','transaction_manager','stock_requester','chef','request'];
+    }
+
+    function isStockRequesterOf(companyId) {
+      return signedIn() && myEmployeeExists(companyId)
+        && get(myEmployeePath(companyId)).data.uid == myUid()
+        && get(myEmployeePath(companyId)).data.status == 'active'
+        && get(myEmployeePath(companyId)).data.role in ['stock_requester','chef','request'];
+    }
+
+    function isAllowedEmployeeRole(role) {
+      return role in ['inventory_manager','transaction_manager','stock_requester','chef','request'];
+    }
+
+    function isActiveOrInvitedEmployeeForCompany(companyId) {
+      return signedIn() && exists(myEmployeePath(companyId))
+        && get(myEmployeePath(companyId)).data.email == myEmail()
+        && get(myEmployeePath(companyId)).data.status in ['active','invited'];
+    }
+
+    match /codes/{code} {
+      allow read: if signedIn() && (
+        resource.data.reservedBy == myUid()
+        || isActiveOrInvitedEmployeeForCompany(resource.data.companyId)
+      );
+      allow create: if signedIn()
+        && request.resource.data.reservedBy == myUid()
+        && request.resource.data.companyId is string
+        && isOwnerOf(request.resource.data.companyId);
+      allow delete: if signedIn()
+        && resource.data.reservedBy == myUid()
+        && isOwnerOf(resource.data.companyId);
+      allow update: if false;
+    }
+
+    match /companies/{companyId} {
+      allow read: if isOwnerOf(companyId) || isActiveMemberOf(companyId) || isActiveOrInvitedEmployeeForCompany(companyId);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == myUid()
+        && request.resource.data.ownerEmail == myEmail();
+      allow update: if isOwnerOf(companyId)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.ownerEmail == resource.data.ownerEmail
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name','nameLower','code','companyCodeVersion','companyCodeChangedAt','companyCodeChangedBy'
+        ]);
+      allow delete: if isOwnerOf(companyId);
+
+      match /employees/{emailKey} {
+        allow read: if signedIn() && (emailKey == myEmail() || isAdminOf(companyId));
+
+        allow create: if signedIn() && (
+          (
+            emailKey == myEmail()
+            && request.resource.data.email == myEmail()
+            && request.resource.data.uid == myUid()
+            && request.resource.data.role == 'admin'
+            && request.resource.data.status == 'active'
+            && isOwnerOf(companyId)
+          )
+          ||
+          (
+            isAdminOf(companyId)
+            && emailKey != myEmail()
+            && request.resource.data.email == emailKey
+            && request.resource.data.role is string
+            && isAllowedEmployeeRole(request.resource.data.role)
+            && request.resource.data.status == 'invited'
+            && request.resource.data.addedBy == myUid()
+          )
+        );
+
+        allow update: if signedIn() && (
+          (
+            emailKey == myEmail()
+            && (
+              (
+                resource.data.status == 'invited'
+                && request.resource.data.status == 'active'
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','uid','joinedAt','displayName'])
+                && request.resource.data.uid == myUid()
+                && request.resource.data.role == resource.data.role
+                && request.resource.data.email == resource.data.email
+              )
+              ||
+              (
+                resource.data.status == 'active'
+                && request.resource.data.status == 'active'
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName'])
+                && request.resource.data.uid == resource.data.uid
+                && request.resource.data.role == resource.data.role
+              )
+            )
+          )
+          ||
+          (
+            isAdminOf(companyId)
+            && emailKey != myEmail()
+            && request.resource.data.email == resource.data.email
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role','workingDays','status'])
+            && request.resource.data.role is string
+            && isAllowedEmployeeRole(request.resource.data.role)
+            && request.resource.data.status in ['invited','active','disabled']
+          )
+        );
+
+        allow delete: if isAdminOf(companyId)
+          && emailKey != myEmail()
+          && resource.data.role != 'admin'
+          && resource.data.uid != get(companyPath(companyId)).data.ownerUid;
+      }
+
+      match /departments/{departmentId} {
+        allow read: if isActiveMemberOf(companyId);
+        allow create: if isAdminOf(companyId)
+          && request.resource.data.createdByUid == myUid()
+          && request.resource.data.name is string;
+        allow update: if false;
+        allow delete: if isAdminOf(companyId);
+      }
+
+      match /items/{itemId} {
+        allow read: if isActiveMemberOf(companyId);
+        allow create: if isAdminOf(companyId)
+          && request.resource.data.name is string
+          && request.resource.data.unit is string
+          && request.resource.data.quantity is number
+          && request.resource.data.lowStockAlert is number
+          && request.resource.data.updatedBy == myUid();
+
+        allow update: if (
+          isAdminOf(companyId)
+          ||
+          (
+            isInventoryManagerOf(companyId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'quantity','updatedAt','updatedBy','updatedByEmail',
+              'procurementStatus','procurementOrderId','procurementOrderSentAt',
+              'procurementOrderSentByUid','procurementOrderSentByEmail','procurementOrderQty',
+              'procurementFulfilledAt','procurementFulfilledByUid','procurementFulfilledByEmail'
+            ])
+            && request.resource.data.updatedBy == myUid()
+            // These audit-attribution fields must always name the person actually
+            // making the write, whenever they're included in the update.
+            && request.resource.data.updatedByEmail == myEmail()
+            && (!request.resource.data.keys().hasAny(['procurementOrderSentByUid']) || request.resource.data.procurementOrderSentByUid == myUid())
+            && (!request.resource.data.keys().hasAny(['procurementOrderSentByEmail']) || request.resource.data.procurementOrderSentByEmail == myEmail())
+            && (!request.resource.data.keys().hasAny(['procurementFulfilledByUid']) || request.resource.data.procurementFulfilledByUid == myUid())
+            && (!request.resource.data.keys().hasAny(['procurementFulfilledByEmail']) || request.resource.data.procurementFulfilledByEmail == myEmail())
+          )
+        );
+        allow delete: if false;
+
+        match /movements/{movementId} {
+          allow read: if isActiveMemberOf(companyId);
+          allow create: if (isAdminOf(companyId) || isInventoryManagerOf(companyId))
+            && request.resource.data.byUid == myUid()
+            && request.resource.data.byEmail == myEmail()
+            && request.resource.data.byRole == get(myEmployeePath(companyId)).data.role
+            && request.resource.data.type in ['receive','dispatch','order_sent','order_fulfilled','opening']
+            && request.resource.data.quantity is number
+            && request.resource.data.quantity >= 0
+            && request.resource.data.unit is string
+            && request.resource.data.itemName is string
+            && request.resource.data.keys().hasOnly([
+              'type','quantity','unit','itemName','department','note','byUid','byEmail','byRole','byName',
+              'createdAt','openingStock','isInitialReceipt','source','orderId','orderSentAt','procurementEvent',
+              'requestId','requestedByEmail','requestedByUid','requestedByRole','requestedByName'
+            ]);
+
+          allow update: if (
+            (
+              isInventoryManagerOf(companyId)
+              && resource.data.byUid == myUid()
+              && resource.data.byRole == 'inventory_manager'
+            ) || (
+              isStockRequesterOf(companyId)
+              && resource.data.byUid == myUid()
+              && resource.data.byRole in ['stock_requester','chef','request']
+            ) || (
+              isInventoryManagerOf(companyId)
+              && resource.data.byUid == myUid()
+              && !resource.data.keys().hasAll(['byRole'])
+            ) || (
+              isStockRequesterOf(companyId)
+              && resource.data.byUid == myUid()
+              && !resource.data.keys().hasAll(['byRole'])
+            )
+          )
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'type','quantity','note','editedAt','editedByUid','editedByEmail','byRole','editCount','deleted','active',
+            'deletedAt','deletedByUid','deletedByEmail','deletedByRole'
+          ])
+          && request.resource.data.byUid == resource.data.byUid
+          && request.resource.data.byEmail == resource.data.byEmail
+          && request.resource.data.unit == resource.data.unit
+          && request.resource.data.itemName == resource.data.itemName
+          && request.resource.data.createdAt == resource.data.createdAt
+          // byRole is part of the original audit identity of this movement and must
+          // stay immutable once set. The only exception is a one-time backfill for
+          // legacy movements that predate the byRole field, and even then the value
+          // must match the editor's own current employee role — it can never be set
+          // to an arbitrary/spoofed role.
+          && (
+            resource.data.byRole == request.resource.data.byRole
+            || (
+              !resource.data.keys().hasAll(['byRole'])
+              && request.resource.data.byRole == get(myEmployeePath(companyId)).data.role
+            )
+          )
+          && (
+            (
+              request.resource.data.deleted == false
+              && request.resource.data.active == true
+              && request.resource.data.editedByUid == myUid()
+              && request.resource.data.editedByEmail == myEmail()
+              && request.resource.data.editCount == (resource.data.editCount is number ? resource.data.editCount + 1 : 1)
+              && request.resource.data.type in ['receive','dispatch','opening']
+              && request.resource.data.quantity is number
+              && request.resource.data.quantity >= 0
+            )
+            ||
+            (
+              request.resource.data.deleted == true
+              && request.resource.data.active == false
+              && request.resource.data.deletedByUid == myUid()
+              && request.resource.data.deletedByEmail == myEmail()
+              && request.resource.data.deletedByRole == get(myEmployeePath(companyId)).data.role
+              && request.resource.data.editCount == (resource.data.editCount is number ? resource.data.editCount + 1 : 1)
+            )
+          );
+          allow delete: if false;
+
+          match /revisions/{revisionId} {
+            allow read: if isActiveMemberOf(companyId);
+            allow create: if (
+              (
+                isInventoryManagerOf(companyId)
+                && get(/databases/$(database)/documents/companies/$(companyId)/items/$(itemId)/movements/$(movementId)).data.byUid == myUid()
+                && get(/databases/$(database)/documents/companies/$(companyId)/items/$(itemId)/movements/$(movementId)).data.byRole == 'inventory_manager'
+              )
+              ||
+              (
+                isStockRequesterOf(companyId)
+                && get(/databases/$(database)/documents/companies/$(companyId)/items/$(itemId)/movements/$(movementId)).data.byUid == myUid()
+                && get(/databases/$(database)/documents/companies/$(companyId)/items/$(itemId)/movements/$(movementId)).data.byRole in ['stock_requester','chef','request']
+              )
+            ) && request.resource.data.changedByUid == myUid();
+            allow update, delete: if false;
+          }
+        }
+      }
+
+      match /requests/{requestId} {
+        allow read: if isAdminOf(companyId)
+          || isInventoryManagerOf(companyId)
+          || (isActiveMemberOf(companyId) && resource.data.requestedByUid == myUid());
+
+        allow create: if isRequestCreatorRole(companyId)
+          && request.resource.data.requestedByUid == myUid()
+          && request.resource.data.requestedByEmail == myEmail()
+          && request.resource.data.status == 'pending';
+
+        allow update: if (
+          isInventoryManagerOf(companyId)
+          && request.resource.data.requestedByUid == resource.data.requestedByUid
+          && request.resource.data.requestedByEmail == resource.data.requestedByEmail
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','updatedAt','reviewedByUid','reviewedByEmail','fulfilledAt','fulfilledByUid','fulfilledByEmail'
+          ])
+          && request.resource.data.status in ['pending','approved','rejected','fulfilled']
+        ) || (
+          isStockRequesterOf(companyId)
+          && resource.data.requestedByUid == myUid()
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status','updatedAt','cancelledAt','cancelledByUid','cancelledByEmail'
+          ])
+          && request.resource.data.cancelledByUid == myUid()
+        );
+
+        allow delete: if false;
+
+        match /events/{eventId} {
+          allow read: if isAdminOf(companyId)
+            || isInventoryManagerOf(companyId)
+            || (isActiveMemberOf(companyId)
+              && get(/databases/$(database)/documents/companies/$(companyId)/requests/$(requestId)).data.requestedByUid == myUid());
+
+          allow create: if (
+            (
+              isInventoryManagerOf(companyId)
+              && request.resource.data.actorUid == myUid()
+              && get(/databases/$(database)/documents/companies/$(companyId)/requests/$(requestId)).data.requestedByUid == request.resource.data.requestedByUid
+            )
+            ||
+            (
+              isActiveMemberOf(companyId)
+              && get(/databases/$(database)/documents/companies/$(companyId)/requests/$(requestId)).data.requestedByUid == myUid()
+              && request.resource.data.actorUid == myUid()
+            )
+          );
+          allow update, delete: if false;
+        }
+      }
+
+      match /userNotifications/{uid}/notifications/{notificationId} {
+        allow read: if isActiveMemberOf(companyId) && uid == myUid();
+        allow create: if (isInventoryManagerOf(companyId) || isAdminOf(companyId))
+          && uid == request.resource.data.recipientUid
+          && exists(/databases/$(database)/documents/companies/$(companyId)/requests/$(request.resource.data.requestId))
+          && get(/databases/$(database)/documents/companies/$(companyId)/requests/$(request.resource.data.requestId)).data.requestedByUid == uid;
+        allow update: if isActiveMemberOf(companyId)
+          && uid == myUid()
+          && request.resource.data.recipientUid == resource.data.recipientUid
+          && request.resource.data.requestId == resource.data.requestId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read','readAt']);
+        allow delete: if false;
+      }
+    }
+
+    match /memberships/{uid} {
+      allow read: if signedIn() && myUid() == uid;
+
+      allow create: if signedIn()
+        && myUid() == uid
+        && request.resource.data.email == myEmail()
+        && (
+          (
+            request.resource.data.role == 'admin'
+            && isOwnerOf(request.resource.data.companyId)
+          )
+          ||
+          (
+            request.resource.data.role is string
+            && exists(employeePath(request.resource.data.companyId, myEmail()))
+            && get(employeePath(request.resource.data.companyId, myEmail())).data.uid == myUid()
+            && get(employeePath(request.resource.data.companyId, myEmail())).data.email == myEmail()
+            && get(employeePath(request.resource.data.companyId, myEmail())).data.role == request.resource.data.role
+            && get(employeePath(request.resource.data.companyId, myEmail())).data.status == 'active'
+          )
+        );
+
+      allow update: if signedIn()
+        && myUid() == uid
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'securityPinHash','securityPinUpdatedAt','biometricEnrolled'
+        ]);
+
+      allow delete: if signedIn() && (
+        myUid() == uid
+        || (resource.data.companyId is string && isOwnerOf(resource.data.companyId))
+      );
+    }
+  }
+}
