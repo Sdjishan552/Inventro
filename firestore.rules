@@ -161,6 +161,62 @@ service cloud.firestore {
         allow delete: if isAdminOf(companyId);
       }
 
+      match /orderLists/{dateKey} {
+        // Admin: read-only access to all saved Transaction Manager order lists.
+        allow read: if isAdminOf(companyId)
+          || (isActiveMemberOf(companyId)
+            && get(myEmployeePath(companyId)).data.role == 'transaction_manager'
+            && (!exists(/databases/$(database)/documents/companies/$(companyId)/orderLists/$(dateKey))
+              || resource.data.preparedByUid == myUid()));
+
+        // Only an active Transaction Manager can create today's list.
+        allow create: if isActiveMemberOf(companyId)
+          && get(myEmployeePath(companyId)).data.role == 'transaction_manager'
+          && request.resource.data.dateKey == dateKey
+          && request.resource.data.preparedByUid == myUid()
+          && request.resource.data.preparedByEmail == myEmail()
+          && request.resource.data.dayEndAt is timestamp
+          && request.resource.data.dayEndAt > request.time
+          && request.resource.data.items is list
+          && request.resource.data.locked == false;
+
+        // Only the original Transaction Manager can edit today's still-open list.
+        allow update: if isActiveMemberOf(companyId)
+          && get(myEmployeePath(companyId)).data.role == 'transaction_manager'
+          && resource.data.preparedByUid == myUid()
+          && resource.data.dayEndAt is timestamp
+          && resource.data.dayEndAt > request.time
+          && request.resource.data.dateKey == resource.data.dateKey
+          && request.resource.data.preparedByUid == resource.data.preparedByUid
+          && request.resource.data.preparedByEmail == resource.data.preparedByEmail
+          && request.resource.data.dayEndAt == resource.data.dayEndAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'items','updatedAt','lastGeneratedAt','version','locked'
+          ])
+          && request.resource.data.items is list
+          && request.resource.data.locked == false;
+
+        // Order lists and their history are never deleted.
+        allow delete: if false;
+
+        match /versions/{versionId} {
+          allow read: if isAdminOf(companyId)
+            || (isActiveMemberOf(companyId)
+              && get(myEmployeePath(companyId)).data.role == 'transaction_manager'
+              && get(/databases/$(database)/documents/companies/$(companyId)/orderLists/$(dateKey)).data.preparedByUid == myUid());
+
+          allow create: if isActiveMemberOf(companyId)
+            && get(myEmployeePath(companyId)).data.role == 'transaction_manager'
+            && get(/databases/$(database)/documents/companies/$(companyId)/orderLists/$(dateKey)).data.preparedByUid == myUid()
+            && get(/databases/$(database)/documents/companies/$(companyId)/orderLists/$(dateKey)).data.dayEndAt > request.time
+            && request.resource.data.version is number
+            && request.resource.data.items is list
+            && request.resource.data.preparedByUid == myUid();
+
+          allow update, delete: if false;
+        }
+      }
+
       match /items/{itemId} {
         allow read: if isActiveMemberOf(companyId);
         allow create: if isAdminOf(companyId)
