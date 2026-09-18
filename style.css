@@ -1,4 +1,3 @@
-
 /* =========================================================
    INVENTRO — Light Professional UI
    ========================================================= */
@@ -1746,8 +1745,9 @@ html, body, #app { max-width:100%; overflow-x:hidden; }
 }
 
 @media (max-width:430px){
-  .stats-page .stat-grid { grid-template-columns:1fr; }
-  .stats-page .stat-card { min-width:0; }
+  .stats-page .stat-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .stats-page .stat-card { min-width:0; padding:11px; }
+  .stats-page .stat-card strong { font-size:20px; }
   .landing-shell { width:calc(100% - 24px); }
   .landing-copy h1 { font-size:34px; }
   .preview-window { width:100%; }
