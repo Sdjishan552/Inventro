@@ -140,3 +140,13 @@ This pass checked the delivered package file-by-file against the claims made abo
 
 ### Files changed in this pass
 `firestore.rules`, `package.json`, and the test file (relocated to `tests/firestore.rules.test.js` with one new test added). `app.js`, `style.css`, `index.html`, `manifest.json`, `firebase.json`, `sw.js` were reviewed and left unchanged. `SECURITY-SHA256.txt` was regenerated to cover the current, complete file set (it previously omitted the test file entirely).
+
+## Live movement window reduced to 2 days — 2026-09-18
+
+At the owner's request, to stay further inside the Firestore free tier. This only touches `app.js`; `firestore.rules` is unaffected (the rules never referenced a specific day count for what's realtime vs. on-demand — that split is purely a client-side read-volume optimization, not a security boundary).
+
+- `MOVEMENT_LIVE_DAYS` changed from `3` to `2`. This single constant controls: which items get a live `onSnapshot` movement listener (only items updated within the window), the cutoff `listHistory()` uses before falling back to an on-demand query, and the date range the Stats page's activity numbers are computed over. Older data was never deleted and remains fully available on demand (Today's/older-day History lookups, CSV export) — this only changes how many days stay "live" by default.
+- **Found and fixed while making this change:** the Stats page's "Last 7 days" activity chart was already inconsistent with the live window before this change — it always drew 7 days of bars regardless of `MOVEMENT_LIVE_DAYS`, but the movement rows feeding it had already been filtered down to the (then 3-day) live window one step earlier. So every day older than the live window silently showed a flat zero instead of real history, while still being labeled "Last 7 days." The chart, its title, and the on-screen "Activity cards and transaction charts use the last N days" text now all read from `MOVEMENT_LIVE_DAYS` directly, so this can't drift out of sync again if the window is changed in the future.
+- A stale comment above `listHistory()` that said "intentionally only 7 days" (contradicting the actual `MOVEMENT_LIVE_DAYS` value, which was already 3 at the time) was corrected to reference the constant by name instead of a hardcoded number.
+- Not changed: the day-picker in History still lets any role open any specific past day via `getMovementRowsForDay(day)`, which always queries Firestore directly regardless of the live window — that path is unaffected by this constant and continues to work exactly as before.
+- Cost impact: fewer days of items get a live listener, and the Stats/History live-cache queries cover a smaller date range — net reduction in reads/listener count, no increase anywhere.
