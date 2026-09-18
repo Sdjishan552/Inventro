@@ -1257,6 +1257,7 @@ function maybeNotifyStockState(items){
 let historyNavigationReady = false;
 function navigate(nextView, { replace = false } = {}) {
   if (view === nextView) { render(); return; }
+  if (nextView === 'admin') adminActiveTab = null;
   view = nextView;
   const state = { inventro: true, view: nextView };
   if (replace || !historyNavigationReady) history.replaceState(state, '', location.href);
@@ -1272,12 +1273,37 @@ function navigateBack(fallback = 'home') {
   }
 }
 
+// History account workspaces are sub-pages of the Admin History screen.
+// Give each selected account its own browser-history entry so Android/browser
+// Back returns to the History account menu instead of jumping to Home.
+function navigateHistoryWorkspace(historyRole) {
+  if (!historyNavigationReady) {
+    renderHistory(historyRole);
+    return;
+  }
+  history.pushState({ inventro: true, view: 'history', historyRole }, '', location.href);
+  renderHistory(historyRole);
+}
+
+function navigateHistoryMenuBack() {
+  if (historyNavigationReady && history.state?.inventro && history.state.view === 'history' && history.state.historyRole) {
+    history.back();
+    return;
+  }
+  renderHistory();
+}
+
 window.addEventListener('popstate', (event) => {
   // Keep Android/browser Back inside the SPA. The initial document entry must
   // never resolve to Inventro's internal loading screen.
   if (event.state?.inventro && event.state.view) {
     view = event.state.view;
-    render();
+    adminActiveTab = view === 'admin' ? (event.state.adminTab || null) : null;
+    if (view === 'history' && membership?.role === 'admin' && event.state.historyRole) {
+      renderHistory(event.state.historyRole);
+    } else {
+      render();
+    }
     return;
   }
   view = auth.currentUser ? (membership ? 'home' : 'welcome') : 'welcome';
@@ -2012,6 +2038,36 @@ function updateHomeStockBadge(count) {
   if (card) card.classList.toggle('home-alert-card', count > 0);
 }
 
+// Sets the red badge on the installed app's home-screen icon (the Badging
+// API — navigator.setAppBadge). This is separate from the Notification API:
+// it needs no permission prompt, but only shows up while this page's JS is
+// running (open, or backgrounded but not yet killed by Android) — the badge
+// value persists on the icon after that until the app is opened again and
+// this runs once more. Each role gets a different meaning for the number:
+//   admin              -> how many items are at/below their low-stock alert
+//   inventory_manager  -> how many stock requests are waiting on them
+//   transaction_manager / stock_requester / chef / request
+//                      -> how many of their own request updates are unread
+function updateAppIconBadge(lowStockCount, pendingRequestCount, myNotifications) {
+  if (!('setAppBadge' in navigator)) return;
+  const role = membership?.role;
+  let count = 0;
+  if (role === 'admin') count = Number(lowStockCount || 0);
+  else if (role === 'inventory_manager') count = Number(pendingRequestCount || 0);
+  else if (['stock_requester', 'chef', 'request', 'transaction_manager'].includes(role)) {
+    count = (myNotifications || []).filter(n => !n.read).length;
+  }
+  try {
+    if (count > 0) navigator.setAppBadge(count).catch(() => {});
+    else navigator.clearAppBadge().catch(() => {});
+  } catch (_) {}
+}
+
+function clearAppIconBadge() {
+  if (!('clearAppBadge' in navigator)) return;
+  try { navigator.clearAppBadge().catch(() => {}); } catch (_) {}
+}
+
 function startRequestBadgeListener() {
   stopRequestBadgeListener();
   // The pending-request badge belongs to the Inventory Manager. Chef/Request
@@ -2054,6 +2110,7 @@ function startHomeStatusListener() {
     updateHomeStockBadge(low);
     if (membership?.role === 'inventory_manager') updateRequestBadge(latestPending);
     else if (['stock_requester','chef','request','transaction_manager'].includes(membership?.role)) updateHomeRequestNotificationAlert(latestNotifications);
+    updateAppIconBadge(low, latestPending, latestNotifications);
   };
   const unItems = onSnapshot(
     collection(db, 'companies', companyId, 'items'),
@@ -2104,7 +2161,7 @@ function buildTransactionManagerDailyCsvFile(day, rows, items, activity='all', d
   const lines=[['Inventro Transaction Manager Daily CSV'],['Date',day],['Movement filter',movementFilter],['Department filter',departmentFilter],['Generated',formatDate(new Date())],[],['Item Name','Movement','Department','Quantity','Unit','Time','Person ID','Role','Requested By','Request ID','Note','Status'],...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit||'',formatDate(r.createdAt),r.byEmail?shortPersonId(r.byEmail,r.byRole||r.actorRole||''):'',roleLabel(r.byRole||r.actorRole||''),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL'])].map(row=>row.map(esc).join(','));
   return new File([lines.join('\r\n')],`Inventro-TM-Daily-${day}.csv`,{type:'text/csv;charset=utf-8'});
 }
-async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`); }
+async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareCsvFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`); }
 function downloadTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); const url=URL.createObjectURL(file); const a=document.createElement('a'); a.href=url; a.download=file.name; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); return 'downloaded'; }
 
 function renderHome(membership) {
@@ -2238,20 +2295,83 @@ function currentStockRows(items) {
 }
 
 async function shareFile(file, text) {
-  // The Share button must open the native Android/Web Share sheet.
-  // Do NOT silently fall back to downloading: that makes a Share tap behave
-  // like the Download button. Some Android browsers report canShare(false)
-  // for CSV files even though navigator.share can still hand the File to the
-  // native share sheet, so try the file share directly.
-  if (!navigator.share) throw new Error('File sharing is not supported by this browser. Please use Chrome on Android.');
+  // Generic file sharing is still used for PDFs and other non-CSV reports.
+  // A cancelled share must remain a cancellation; other failures are reported
+  // to the caller so it can decide whether a download fallback is appropriate.
+  if (!navigator.share) throw new Error('File sharing is not supported by this browser.');
   try {
     await navigator.share({ title: 'Inventro Stock Report', text, files: [file] });
     return 'shared';
   } catch (err) {
     if (err?.name === 'AbortError') throw err;
     console.error('Native file sharing failed.', err);
-    throw new Error('Could not open the Android share sheet. Please try again or use Download CSV.');
+    throw err;
   }
+}
+
+function downloadCsvFile(file){
+  const url=URL.createObjectURL(file);
+  const a=document.createElement('a');
+  a.href=url; a.download=file.name; a.rel='noopener';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+  return 'downloaded';
+}
+
+async function shareCsvFile(file, text) {
+  // A desktop browser (including Chrome DevTools mobile emulation) should
+  // download CSV directly. navigator.share can exist there but still reject
+  // file sharing with NotAllowedError, which only creates a misleading
+  // console error. Native CSV sharing is reserved for an actual mobile/tablet
+  // browser that exposes the share API.
+  if (!isMobileDevice() || !navigator.share) return downloadCsvFile(file);
+  try {
+    if (typeof navigator.canShare === 'function' && !navigator.canShare({files:[file]})) {
+      return downloadCsvFile(file);
+    }
+    return await shareFile(file, text);
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    console.warn('CSV file sharing unavailable; downloading instead.', err);
+    return downloadCsvFile(file);
+  }
+}
+
+async function exportHistoryCsv(day, rows, selectedRole, activity='all', department='all'){
+  const selected=Array.isArray(rows)?rows:[];
+  if(!selected.length) throw new Error(`No matching history was recorded on ${day}.`);
+  const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;
+  const roleName=roleLabel(selectedRole);
+  const activityName={
+    all:'All activity', received:'Received items', dispatched:'Dispatched items',
+    'requested-dispatch':'Requested item dispatches', pending:'Pending', approved:'Approved',
+    rejected:'Rejected', fulfilled:'Dispatched', cancelled:'Cancelled'
+  }[activity]||activity;
+  const lines=[
+    ['Inventro History CSV'],
+    ['Account',roleName],
+    ['Date',day],
+    ['Activity filter',activityName],
+    ['Department filter',department==='all'?'All departments':department],
+    ['Generated',formatDate(new Date())],
+    [],
+    ['Type','Item / Request','Movement / Status','Department','Quantity','Unit','Person','Role','Time','Requested By','Request ID','Note','Record Status']
+  ];
+  selected.forEach(r=>{
+    if(r.kind==='request'){
+      lines.push(['Request',r.itemName||'Stock request',eventLabel(r),r.department||'',r.quantity??'',r.unit||'',r.actorEmail?shortPersonId(r.actorEmail,r.actorRole||'inventory_manager'):shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'),r.actorRole?roleLabel(r.actorRole):roleLabel(r.requestedByRole||'stock_requester'),formatDate(r.createdAt),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.eventType||'']);
+    }else{
+      lines.push(['Movement',r.itemName||'',movementLabel(r.type),r.department||'',r.quantity??'',r.unit||'',r.byEmail?shortPersonId(r.byEmail,r.actorRole||r.byRole||''):'',roleLabel(r.actorRole||r.byRole||''),formatDate(r.createdAt),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL']);
+    }
+  });
+  const safeRole=String(roleName).replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()||'history';
+  const file=new File([lines.map(row=>row.map(esc).join(',')).join('\r\n')],`Inventro-History-${safeRole}-${day}.csv`,{type:'text/csv;charset=utf-8'});
+  // One export control: on mobile, use the native share sheet so the CSV can
+  // be sent directly to WhatsApp/etc.; on desktop, download the CSV normally.
+  if(isMobileDevice() && navigator.share){
+    return shareCsvFile(file,`${membership?.companyName||'Company'} — ${roleName} history ${day}`);
+  }
+  return downloadCsvFile(file);
 }
 
 function itemHasOutstandingOrder(item) {
@@ -2343,7 +2463,7 @@ async function shareCurrentStockCsv(itemsOverride=null){
   const items=Array.isArray(itemsOverride)?itemsOverride:await listItems(); const rows=currentStockRows(items); if(!rows.length) throw new Error('There are no stock items to share.');
   const escapeCsv=value=>`"${String(value??'').replaceAll('"','""')}"`;
   const lines=[['Item Name','Current Quantity','Unit','Low Stock Limit','Status','Last Updated'].map(escapeCsv).join(','),...rows.map(r=>[r.name,r.quantity,r.unit,r.low,stockState(r.quantity,r.low),r.updated].map(escapeCsv).join(','))];
-  const file=new File([lines.join('\r\n')],`Inventro-Current-Stock-${new Date().toISOString().slice(0,10)}.csv`,{type:'text/csv;charset=utf-8'});return shareFile(file,`${membership?.companyName||'Company'} — Current Stock List`);
+  const file=new File([lines.join('\r\n')],`Inventro-Current-Stock-${new Date().toISOString().slice(0,10)}.csv`,{type:'text/csv;charset=utf-8'});return shareCsvFile(file,`${membership?.companyName||'Company'} — Current Stock List`);
 }
 
 async function shareDailyHistoryCsv(dateStr, rowsOverride=null){
@@ -2353,7 +2473,7 @@ async function shareDailyHistoryCsv(dateStr, rowsOverride=null){
   const selected=rows.filter(r=>{const ms=r.createdAt?.toMillis?.()||0;return ms>=start.getTime()&&ms<=end.getTime();}).sort((a,b)=>{const byItem=(a.itemName||'').localeCompare(b.itemName||'',undefined,{sensitivity:'base'});if(byItem)return byItem;return (a.createdAt?.toMillis?.()||0)-(b.createdAt?.toMillis?.()||0);});
   if(!selected.length) throw new Error(`No stock history was recorded on ${day}.`);
   const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;const lines=[['Item Name','Movement','Department','Quantity','Unit','Person ID','Role','Time','Note','Status','Edited By ID','Edited At','Deleted By ID','Deleted At','Requested By ID'].map(esc).join(','),...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit,r.byEmail?shortPersonId(r.byEmail,r.actorRole||r.byRole||''):'',roleLabel(r.actorRole||r.byRole||''),formatDate(r.createdAt),r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL',r.editedByEmail?shortPersonId(r.editedByEmail,r.editedByRole||r.actorRole||r.byRole||''):'',r.editedAt?formatDate(r.editedAt):'',r.deletedByEmail?shortPersonId(r.deletedByEmail,r.deletedByRole||r.actorRole||r.byRole||''): '',r.deletedAt?formatDate(r.deletedAt):'',r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'): ''].map(esc).join(','))];
-  const file=new File([lines.join('\r\n')],`Inventro-Daily-History-${day}.csv`,{type:'text/csv;charset=utf-8'});return shareFile(file,`${membership?.companyName||'Company'} — Daily stock history ${day}`);
+  const file=new File([lines.join('\r\n')],`Inventro-Daily-History-${day}.csv`,{type:'text/csv;charset=utf-8'});return shareCsvFile(file,`${membership?.companyName||'Company'} — Daily stock history ${day}`);
 }
 
 async function renderStock(){
@@ -2706,6 +2826,7 @@ async function renderHistory(forcedRole=null){
       }
       return true;
     });
+    exportRows = shown.slice();
     target.innerHTML=shown.map(r=>{
       if(r.kind==='request'){
         const requestStatusClass = String(r.eventType||'pending').toLowerCase();
@@ -2732,7 +2853,7 @@ async function renderHistory(forcedRole=null){
     <section class="feature-header"><p class="eyebrow">Daily log book</p><h1>${adminMenuOnly?'History':'History · '+escapeHtml(roleLabel(selectedRole))}</h1><p>${adminMenuOnly?'Choose one history section. The selected section opens as its own clean workspace. Admin remains read-only.':selectedRole==='stock_requester'?'This workspace shows stock requests and the Inventory Manager fulfilments for your requests.':selectedRole==='inventory_manager'?'This workspace shows receiving, direct dispatch and dispatches made to fulfill stock requests.':selectedRole==='transaction_manager'?'This workspace shows the Inventory Manager live and finished daily transaction report day by day.':'This workspace shows Stock Requisitioner request activity and dispatched fulfilments.'}</p></section>
     ${adminMenuOnly?`<section class="history-admin-menu" id="history-admin-menu"><button class="history-account-card" data-history-role="inventory_manager" type="button"><span>📦</span><strong>Inventory Manager</strong><small>Receiving, dispatch & request fulfilment</small></button><button class="history-account-card" data-history-role="stock_requester" type="button"><span>📝</span><strong>Stock Requisitioner</strong><small>Requests, approvals & dispatched fulfilments</small></button><button class="history-account-card" data-history-role="transaction_manager" type="button"><span>🧾</span><strong>Transaction Manager</strong><small>Transaction control & daily statements</small></button></section>`:`<section class="history-workspace" id="history-workspace">
       ${isAdmin?`<div class="history-workspace-bar"><button type="button" class="back-btn" id="history-menu-back">‹ History</button><strong id="history-workspace-title">${escapeHtml(roleLabel(selectedRole))} History</strong></div>`:''}
-      <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div>${isAdmin||role==='inventory_manager'?`<button class="small-action csv-btn" id="share-day-csv" type="button">📊 Share day CSV</button>`:''}${selectedRole==='transaction_manager'?`<div class="tm-history-csv-actions"><button class="small-action csv-btn tm-download-csv" id="tm-history-download-csv" type="button">📥 Download CSV</button><button class="small-action csv-btn tm-share-csv" id="tm-history-share-csv" type="button">📤 Share CSV</button></div>`:''}${selectedRole!=='transaction_manager'?`<button class="small-action" id="history-today" type="button">Today</button>`:''}</section>
+      <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><button class="small-action csv-btn" id="history-export-csv" type="button">📊 Download / Share CSV</button></section>
       ${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${selectedRole==='transaction_manager'?`<section class="admin-card tm-live-panel" id="history-live-panel"><div id="tm-live-report"></div></section>`:`<section class="admin-card" id="history-daily-panel"><div id="daily-statement" class="daily-statement" hidden></div><div id="history-list" class="history-list"></div></section>`}
     </section>`}</div>`;
 
@@ -2761,6 +2882,7 @@ async function renderHistory(forcedRole=null){
     return combinedForRole(role);
   };
   let refreshSerial=0;
+  let exportRows=[];
   const refreshList=async()=>{
     const serial=++refreshSerial;
     const selectedDay=root.querySelector('#history-day')?.value||today;
@@ -2791,7 +2913,7 @@ async function renderHistory(forcedRole=null){
     root.querySelectorAll('[data-delete-movement]').forEach(btn=>btn.addEventListener('click',async()=>{const [itemId,movementId]=btn.dataset.deleteMovement.split(':');if(!confirm('Delete this history entry and recalculate the item stock?'))return;btn.disabled=true;try{await deleteMovement(itemId,movementId);showTemporaryMessage('History entry deleted and stock recalculated.','success');await renderHistory();}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));
   };
   if(adminMenuOnly){
-    root.querySelectorAll('[data-history-role]').forEach(btn=>btn.addEventListener('click',()=>renderHistory(btn.dataset.historyRole)));
+    root.querySelectorAll('[data-history-role]').forEach(btn=>btn.addEventListener('click',()=>navigateHistoryWorkspace(btn.dataset.historyRole)));
     root.querySelector('#history-back').addEventListener('click',()=>navigateBack('home'));
     root.querySelector('#history-refresh').addEventListener('click',()=>renderHistory());
     return;
@@ -2799,16 +2921,27 @@ async function renderHistory(forcedRole=null){
   root.querySelector('#history-type')?.addEventListener('change',()=>{refreshList();});
   root.querySelector('#history-department')?.addEventListener('change',()=>{refreshList();});
   root.querySelector('#history-day')?.addEventListener('change',()=>{refreshList();});
-  root.querySelector('#history-today')?.addEventListener('click',()=>{root.querySelector('#history-day').value=today;refreshList();});
-  // When Admin entered a history card, Back must return to the three-card
-  // History menu, not jump all the way to Home. Other roles keep their normal
-  // Home navigation.
-  root.querySelector('#history-back').addEventListener('click',()=>isAdmin ? renderHistory() : navigateBack('home'));
-  root.querySelector('#history-menu-back')?.addEventListener('click',()=>renderHistory());
+  // When Admin entered a history card, the in-page History button and the
+  // Android/browser Back button both return to the three-card History menu.
+  // Other roles keep their normal Home navigation.
+  root.querySelector('#history-back').addEventListener('click',()=>isAdmin ? navigateHistoryMenuBack() : navigateBack('home'));
+  root.querySelector('#history-menu-back')?.addEventListener('click',()=>isAdmin ? navigateHistoryMenuBack() : renderHistory());
   root.querySelector('#history-refresh').addEventListener('click',()=>renderHistory(selectedRole));
-  root.querySelector('#share-day-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#share-day-csv');b.disabled=true;b.textContent='Preparing CSV…';try{const mode=await shareDailyHistoryCsv(root.querySelector('#history-day').value, rows);showTemporaryMessage(mode==='shared'?'Daily CSV ready to share.':'Daily CSV downloaded.','success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📊 Share day CSV';}});
-  root.querySelector('#tm-history-download-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#tm-history-download-csv');b.disabled=true;b.textContent='Preparing…';try{const selectedDay=root.querySelector('#history-day')?.value||today;const selectedActivity=root.querySelector('#history-type')?.value||'all';const selectedDepartment=root.querySelector('#history-department')?.value||'all';const activity=selectedActivity==='received'?'receive':selectedActivity==='dispatched'?'dispatch':'all';const items=await listItems();downloadTransactionManagerDailyCsv(selectedDay,rows,items,activity,selectedDepartment);showTemporaryMessage('Transaction Manager CSV downloaded.','success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📥 Download CSV';}});
-  root.querySelector('#tm-history-share-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#tm-history-share-csv');b.disabled=true;b.textContent='Preparing…';try{const selectedDay=root.querySelector('#history-day')?.value||today;const selectedActivity=root.querySelector('#history-type')?.value||'all';const selectedDepartment=root.querySelector('#history-department')?.value||'all';const activity=selectedActivity==='received'?'receive':selectedActivity==='dispatched'?'dispatch':'all';const items=await listItems();const mode=await shareTransactionManagerDailyCsv(selectedDay,rows,items,activity,selectedDepartment);showTemporaryMessage(mode==='shared'?'Transaction Manager CSV ready to share.':'Transaction Manager CSV downloaded.','success');}catch(err){if(err?.name!=='AbortError')showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📤 Share CSV';}});
+  root.querySelector('#history-export-csv')?.addEventListener('click',async()=>{
+    const b=root.querySelector('#history-export-csv');
+    b.disabled=true; b.textContent='Preparing CSV…';
+    try{
+      const selectedDay=root.querySelector('#history-day')?.value||today;
+      const selectedActivity=root.querySelector('#history-type')?.value||'all';
+      const selectedDepartment=root.querySelector('#history-department')?.value||'all';
+      const mode=await exportHistoryCsv(selectedDay,exportRows,selectedRole,selectedActivity,selectedDepartment);
+      showTemporaryMessage(mode==='shared'?'CSV ready to share.':'CSV downloaded.','success');
+    }catch(err){
+      if(err?.name!=='AbortError') showTemporaryMessage(friendlyError(err),'error');
+    }finally{
+      b.disabled=false; b.textContent='📊 Download / Share CSV';
+    }
+  });
   if(selectedRole) refreshList();
 }
 
@@ -2955,14 +3088,19 @@ async function renderAdmin() {
   let adminItems = [];
   let error = '';
   let loading = true;
-  let activeTab = null;
+  let activeTab = adminActiveTab;
 
   function draw(tab = activeTab) {
     activeTab = tab;
+    adminActiveTab = tab;
     if (!activeTab) {
       root.innerHTML = `<div class="dashboard admin-page admin-menu-only"><div class="topbar"><button class="back-btn" id="admin-back">‹ Back to workspace</button><div class="topbar-brand">Inventro</div><div class="user-pill"><div class="avatar">${escapeHtml((user?.displayName?.[0] || 'A').toUpperCase())}</div><div class="user-email">${escapeHtml(user?.email || '')}</div></div></div><section class="admin-header"><p class="eyebrow">Administration</p><h1>Admin Center</h1><p>Choose one area to manage. Each section opens on its own clean workspace.</p></section><div class="admin-menu-grid"><button class="admin-menu-card" data-admin-tab="team"><span>👥</span><strong>Team Management</strong><small>Employees, roles & access days</small></button><button class="admin-menu-card" data-admin-tab="inventory"><span>📦</span><strong>Inventory Setup</strong><small>Add, edit and configure goods</small></button><button class="admin-menu-card" data-admin-tab="departments"><span>🏢</span><strong>Departments</strong><small>Manage departments used by the kitchen</small></button><button class="admin-menu-card" data-admin-tab="company"><span>⚙️</span><strong>Company Controls</strong><small>Company information and access code</small></button></div></div>`;
       root.querySelector('#admin-back').addEventListener('click',()=>navigateBack('home'));
-      root.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.addEventListener('click',()=>draw(btn.dataset.adminTab)));
+      root.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.addEventListener('click',()=>{
+        const tab = btn.dataset.adminTab;
+        history.pushState({ inventro: true, view: 'admin', adminTab: tab }, '', location.href);
+        draw(tab);
+      }));
       return;
     }
     root.innerHTML = `
@@ -3078,7 +3216,14 @@ async function renderAdmin() {
       </div>`;
 
     root.querySelector('#admin-back').addEventListener('click', () => navigateBack('home'));
-    root.querySelector('#admin-menu-back')?.addEventListener('click', () => draw(null));
+    root.querySelector('#admin-menu-back')?.addEventListener('click', () => {
+      if (history.state?.inventro && history.state.view === 'admin' && history.state.adminTab) {
+        history.back();
+      } else {
+        adminActiveTab = null;
+        draw(null);
+      }
+    });
     root.querySelector('#toggle-company-code')?.addEventListener('click',()=>{const el=root.querySelector('#company-code-display');const b=root.querySelector('#toggle-company-code');const shown=el.dataset.shown==='1';el.textContent=shown?'••••••':(companyCode||'Not available');el.dataset.shown=shown?'0':'1';b.textContent=shown?'👁':'🙈';});
     root.querySelector('#change-company-code-btn')?.addEventListener('click', async () => {
       if (!confirm('Change the company code? All employees will be signed out and must sign in again with the new code.')) return;
@@ -3192,6 +3337,11 @@ async function renderAdmin() {
 }
 
 // ---------------- router ----------------
+// Which Admin Center sub-section (team/inventory/departments/company) is
+// currently open, if any. Kept outside renderAdmin() so the Android/browser
+// back button can restore it correctly instead of falling through to Home.
+let adminActiveTab = null;
+
 let view = 'loading', membership = null, justCreatedCode = null, returnToJoinAfterSignOut = false;
 
 function render() {
@@ -3265,6 +3415,7 @@ onAuthStateChanged(auth, async (user) => {
     if (homeStatusUnsubscribe) homeStatusUnsubscribe();
     homeStatusUnsubscribe = null;
     stopHomeRequestNotificationAlert();
+    clearAppIconBadge();
     membership = null;
     if (returnToJoinAfterSignOut) {
       returnToJoinAfterSignOut = false;
