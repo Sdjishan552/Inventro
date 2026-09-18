@@ -2169,3 +2169,195 @@ html, body, #app { max-width:100%; overflow-x:hidden; }
   .quantity-part input{height:42px;padding-left:10px;padding-right:8px}
   .quantity-part span{font-size:11px}
 }
+
+
+/* =========================================================
+   CLEAR CONTRAST / EASY-READ UI
+   Thin dark borders make each section visually distinct.
+   ========================================================= */
+
+:root {
+  --border: #9aa3ad;
+  --border-strong: #66717d;
+  --text: #111827;
+  --text-soft: #374151;
+  --text-muted: #59636e;
+
+  /* Keep the existing brand colours, but make focus/selection clearer. */
+  --surface-soft: #f7f8fa;
+}
+
+/* Main structural containers */
+.admin-card,
+.hero,
+.quick-card,
+.employee-row,
+.coming,
+.code-display,
+.toast,
+.user-pill,
+.account-toggle,
+.account-menu,
+.inventory-card,
+.stat-card,
+.history-card,
+.section-card,
+.request-card,
+.order-card,
+.transaction-card,
+.supplier-card,
+.modal-card {
+  border-color: var(--border-strong);
+}
+
+/* Cards/sections: a clean 1px boundary instead of relying on shadows. */
+.admin-card,
+.quick-card,
+.employee-row,
+.inventory-card,
+.stat-card,
+.history-card,
+.section-card,
+.request-card,
+.order-card,
+.transaction-card,
+.supplier-card {
+  border-width: 1px;
+  border-style: solid;
+  box-shadow: none;
+}
+
+/* Strong section headings */
+.section-title,
+.admin-card-title h2,
+.card-title,
+.panel-title,
+.inventory-section-title {
+  color: #111827;
+}
+
+/* Form controls */
+input,
+select,
+textarea {
+  border-color: var(--border-strong) !important;
+  color: #111827;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #1f2937 !important;
+  outline: 2px solid rgba(37, 99, 235, 0.18);
+  outline-offset: 1px;
+}
+
+/* Buttons get a definite outline so older users can identify them easily. */
+.btn,
+.refresh-btn,
+.signout-small,
+.access-btn,
+button {
+  border-color: var(--border-strong);
+}
+
+/* Primary buttons remain branded, but have a crisp edge. */
+.btn-primary {
+  border-color: #1e40af;
+}
+
+/* Clickable cards */
+.quick-card,
+.account-toggle,
+.inventory-card,
+.request-card,
+.order-card {
+  outline: none;
+}
+
+.quick-card:focus-visible,
+.account-toggle:focus-visible,
+.inventory-card:focus-visible,
+.request-card:focus-visible,
+.order-card:focus-visible,
+button:focus-visible {
+  outline: 2px solid #1f2937;
+  outline-offset: 2px;
+}
+
+/* Pills/badges should still be distinguishable from the background. */
+.badge,
+.user-pill,
+.mini-days span,
+.day-option span {
+  border-color: var(--border-strong);
+}
+
+/* Table/list separation */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th,
+td {
+  border-bottom: 1px solid #aeb6bf;
+}
+
+th {
+  color: #111827;
+  font-weight: 700;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Common separators used inside panels */
+.divider,
+.section-divider,
+.list-divider {
+  border-color: var(--border-strong) !important;
+}
+
+/* Quantity fields */
+.quantity-part input,
+.quantity-entry-empty {
+  border-color: var(--border-strong);
+}
+
+/* Reduce the dependence on subtle shadows. */
+.admin-card:hover,
+.quick-card:hover,
+.inventory-card:hover,
+.request-card:hover,
+.order-card:hover {
+  border-color: #4b5563;
+}
+
+/* Slightly larger body text improves readability without changing the layout. */
+label {
+  color: #374151;
+}
+
+.helper-text {
+  color: #59636e;
+}
+
+/* Status boxes retain their colours but get a clear outer boundary. */
+.error-box {
+  border-color: #991b1b;
+}
+
+.access-btn.disable {
+  border-color: #b91c1c;
+}
+
+.access-btn.enable {
+  border-color: #15803d;
+}
+
+/* Keep the interface calm: no thick borders or excessive decoration. */
