@@ -643,9 +643,20 @@ async function createInventoryItem({name,unit,openingStock,lowStockAlert}) {
     updatedBy:user.uid,updatedByEmail:user.email?.toLowerCase() || ''
   });
   await setDoc(doc(ref,'movements',`${Date.now()}-opening`),{
-    type:'opening',quantity,unit,itemName:cleanName,note:'Opening stock',
-    byUid:user.uid,byEmail:user.email?.toLowerCase() || '',byRole:membership?.role || '',
-    openingStock:quantity,createdAt:serverTimestamp()
+    // The initial quantity entered by Admin is a receipt into the company's
+    // inventory. Keep the legacy 'opening' compatibility value only through
+    // the movement id; the movement itself is stored as a normal receive so
+    // every receiving report/filter can treat it consistently.
+    type:'receive',quantity,unit,itemName:cleanName,
+    note:'Initial inventory received by Admin',
+    byUid:user.uid,
+    byEmail:user.email?.toLowerCase() || '',
+    byRole:'admin',
+    byName:user.displayName || membership?.name || '',
+    openingStock:quantity,
+    isInitialReceipt:true,
+    source:'admin_item_creation',
+    createdAt:serverTimestamp()
   });
 }
 
@@ -1071,7 +1082,14 @@ async function deleteMovement(itemId,movementId){
   });
 }
 
-function movementLabel(type){return ({opening:'Opening stock',receive:'Received',dispatch:'Dispatched'})[type]||type;}
+function effectiveMovementType(rowOrType){
+  const type=typeof rowOrType==='string' ? rowOrType : rowOrType?.type;
+  // Legacy items used type:'opening'. It is now interpreted as an initial
+  // receipt so old records behave exactly like newly-created Admin receipts.
+  return type==='opening' ? 'receive' : type;
+}
+function isReceiveMovement(row){return effectiveMovementType(row)==='receive';}
+function movementLabel(type){return effectiveMovementType(type)==='receive'?'Received':effectiveMovementType(type)==='dispatch'?'Dispatched':effectiveMovementType(type)||type;}
 function stockState(q,low){
   q=Number(q||0); low=Number(low||0);
   if(q<=low) return 'low';
@@ -1197,10 +1215,12 @@ function personRef(email, role='', explicitName='') {
 }
 
 function transactionOriginLabel(row){
+  if(row?.isInitialReceipt || row?.source==='admin_item_creation' || row?.type==='opening') return 'ADMIN INITIAL RECEIPT';
   return row?.requestId ? 'REQUESTED TRANSACTION' : 'SELF TRANSACTION';
 }
 
 function transactionOriginShort(row){
+  if(row?.isInitialReceipt || row?.source==='admin_item_creation' || row?.type==='opening') return 'ADMIN INITIAL';
   return row?.requestId ? 'REQUESTED' : 'SELF';
 }
 
@@ -1301,6 +1321,8 @@ window.addEventListener('popstate', (event) => {
     adminActiveTab = view === 'admin' ? (event.state.adminTab || null) : null;
     if (view === 'history' && membership?.role === 'admin' && event.state.historyRole) {
       renderHistory(event.state.historyRole);
+    } else if (view === 'revision') {
+      renderRevisionPage();
     } else {
       render();
     }
@@ -2617,45 +2639,91 @@ function buildTransactionManagerDailyReport(rows, day, options={}) {
   const before = ledgerRows.filter(r => movementMillis(r) < targetStart);
   const duringDay = ledgerRows.filter(r => { const t=movementMillis(r); return t>=targetStart && t<endMs; });
 
-  const imDayRows = duringDay.filter(r => movementActorRole(r)==='inventory_manager');
+  const itemMap=new Map((options.items||[]).map(i=>[i.id,i]));
+  // If an Admin created an item during the selected day, make its initial
+  // quantity a normal receipt even if the realtime movement listener has not
+  // delivered that newly-created movement yet. This keeps the daily report
+  // immediately consistent with the item record.
+  const initialRowsByItem=new Map();
+  duringDay.forEach(r=>{
+    if(isReceiveMovement(r) && movementActorRole(r)==='admin' &&
+       (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening')){
+      if(!initialRowsByItem.has(r.itemId)) initialRowsByItem.set(r.itemId,[]);
+      initialRowsByItem.get(r.itemId).push(r);
+    }
+  });
+  const syntheticInitialRows=[];
+  itemMap.forEach((item,itemId)=>{
+    const created=movementMillis(item);
+    const qty=Number(item.openingStock);
+    const isCreatedOnSelectedDay=created>=targetStart && created<endMs;
+    if(isCreatedOnSelectedDay && Number.isFinite(qty) && qty>0 && !initialRowsByItem.has(itemId)){
+      syntheticInitialRows.push({
+        id:`${itemId}-admin-initial`, itemId, itemName:item.name||itemId, unit:item.unit||'',
+        type:'receive', quantity:qty, note:'Initial inventory received by Admin',
+        byUid:item.updatedBy||'', byEmail:item.updatedByEmail||'', byRole:'admin',
+        byName:item.updatedByName||'', isInitialReceipt:true, source:'admin_item_creation',
+        openingStock:qty, createdAt:item.createdAt||null, syntheticInitialReceipt:true
+      });
+    }
+  });
+  const dayRows=[...duringDay,...syntheticInitialRows];
+
+  const imDayRows = dayRows.filter(r => movementActorRole(r)==='inventory_manager');
+  const adminInitialRows = dayRows.filter(r =>
+    isReceiveMovement(r) && movementActorRole(r)==='admin' &&
+    (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening')
+  );
+  // Admin's first quantity is a real receipt and is visible to Transaction
+  // Manager alongside Inventory Manager receiving activity.
+  const receivingDayRows = [...imDayRows, ...adminInitialRows];
   const activity=options.activity||'all', department=options.department||'all';
-  const visibleRows=imDayRows.filter(r => (activity==='all'||r.type===activity) && (department==='all'||(r.department||'')===department));
+  const visibleRows=receivingDayRows.filter(r =>
+    (activity==='all'||effectiveMovementType(r)===activity) &&
+    (department==='all'||(r.department||'')===department)
+  );
 
   const today=day===localDateKey();
-  const itemMap=new Map((options.items||[]).map(i=>[i.id,i]));
-  const itemIds=[...new Set((today ? duringDay : [...before,...duringDay]).map(r=>r.itemId||r.id).filter(Boolean))];
+  const itemIds=[...new Set([
+    ...dayRows.map(r=>r.itemId||r.id),
+    ...before.map(r=>r.itemId||r.id)
+  ].filter(Boolean))];
 
   const reports=itemIds.map(itemId=>{
     const prior=before.filter(r=>r.itemId===itemId);
-    const dayAll=duringDay.filter(r=>r.itemId===itemId);
-    const dayIm=imDayRows.filter(r=>r.itemId===itemId);
+    const dayAll=dayRows.filter(r=>r.itemId===itemId);
+    const dayIm=receivingDayRows.filter(r=>r.itemId===itemId);
     const sample=dayAll[0]||prior.slice().sort((a,b)=>movementMillis(b)-movementMillis(a))[0]||itemMap.get(itemId);
     if(!sample) return null;
+
+    const initialRows=dayAll.filter(r =>
+      isReceiveMovement(r) && movementActorRole(r)==='admin' &&
+      (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening')
+    );
+    const initialQty=initialRows.reduce((sum,r)=>sum+Number(r.quantity||0),0);
+    const hasNoPriorLedger=prior.length===0;
+    const isNewItemToday=hasNoPriorLedger && initialQty>0;
 
     let opening;
     const liveStartMs=movementLiveStartDate().getTime();
     const isLiveWindowDay=targetStart>=liveStartMs && targetStart<=new Date(`${localDateKey()}T00:00:00`).getTime();
-    if(isLiveWindowDay && itemMap.has(itemId)){
-      // The live cache intentionally contains only 7 days, so it cannot safely
-      // calculate an opening balance by summing rows before the selected day.
-      // Instead, use the item's authoritative current stock and subtract every
-      // non-opening movement from the selected day forward. Opening-stock
-      // movements are treated as the baseline, not as an intraday receipt.
+    if(isNewItemToday){
+      // A newly-created item's opening balance is ZERO. The Admin-entered
+      // quantity belongs entirely in Received for this day.
+      opening=0;
+    }else if(isLiveWindowDay && itemMap.has(itemId)){
       const currentQty=Number(itemMap.get(itemId).quantity||0);
       const netFromSelectedDay=ledgerRows
-        .filter(r=>r.itemId===itemId && movementMillis(r)>=targetStart && r.type!=='opening')
+        .filter(r=>r.itemId===itemId && movementMillis(r)>=targetStart)
         .reduce((sum,r)=>sum+movementSignedQuantity(r),0);
       opening=currentQty-netFromSelectedDay;
     }else{
       opening=prior.reduce((sum,r)=>sum+movementSignedQuantity(r),0);
-      // If the item was created with opening stock on this same day, that opening
-      // movement is the day's opening balance, not a receipt during the day.
-      opening+=dayAll.filter(r=>r.type==='opening').reduce((sum,r)=>sum+Number(r.quantity||0),0);
     }
 
-    const received=dayIm.filter(r=>r.type==='receive').reduce((sum,r)=>sum+Number(r.quantity||0),0);
-    const dispatched=dayIm.filter(r=>r.type==='dispatch').reduce((sum,r)=>sum+Number(r.quantity||0),0);
-    const closing=opening+dayAll.filter(r=>r.type!=='opening').reduce((sum,r)=>sum+movementSignedQuantity(r),0);
+    const received=dayIm.filter(isReceiveMovement).reduce((sum,r)=>sum+Number(r.quantity||0),0);
+    const dispatched=dayIm.filter(r=>effectiveMovementType(r)==='dispatch').reduce((sum,r)=>sum+Number(r.quantity||0),0);
+    const closing=opening+received-dispatched;
     return {itemId,itemName:sample.itemName||sample.name||itemMap.get(itemId)?.name||itemId,unit:sample.unit||itemMap.get(itemId)?.unit||'',opening,received,dispatched,closing,transactions:dayIm,
       hasNegativeOpening:opening<0,hasNegativeClosing:closing<0};
   }).filter(Boolean).sort((a,b)=>a.itemName.localeCompare(b.itemName,undefined,{sensitivity:'base'}));
@@ -2673,35 +2741,70 @@ function renderTransactionManagerLiveReport(root, rows, day, options={}) {
   target.innerHTML=`
     <div class="tm-live-head">
       <div><div class="tm-live-title"><span class="tm-live-dot ${live?'active':'locked'}"></span><strong>${live?'Live daily report':'Finished daily report'}</strong><span class="tm-report-state ${live?'live':'locked'}">${live?'LIVE':'LOCKED'}</span></div>
-      <p>${live?'Updates automatically whenever the Inventory Manager records a receive or dispatch.':'This day is finished. Its report is read-only and preserved from the recorded transaction history.'}</p></div>
+      <p>${live?'Updates automatically whenever inventory is initially received by Admin or the Inventory Manager records a receive or dispatch.':'This day is finished. Its report is read-only and preserved from the recorded transaction history.'}</p></div>
       <div class="tm-last-update">Last transaction<br><strong>${escapeHtml(latest)}</strong></div>
     </div>
-    <div class="tm-live-summary tm-live-summary-compact"><div><span>Transactions</span><strong>${todayRows.length}</strong><small>Inventory Manager entries</small></div><div><span>Items moved</span><strong>${new Set(todayRows.map(r=>r.itemId)).size}</strong><small>Different goods</small></div></div>
-    <div class="tm-live-table-wrap"><table class="tm-live-table"><thead><tr><th>Good</th><th>Opening</th><th>Received</th><th>Dispatched</th><th>Closing</th></tr></thead><tbody>${reports.map(x=>`<tr><td><strong>${escapeHtml(x.itemName)}</strong><small>${escapeHtml(x.unit)}</small></td><td>${formatQty(x.opening)} ${escapeHtml(x.unit)}</td><td class="tm-in">+${formatQty(x.received)} ${escapeHtml(x.unit)}</td><td class="tm-out">−${formatQty(x.dispatched)} ${escapeHtml(x.unit)}</td><td><strong>${formatQty(x.closing)} ${escapeHtml(x.unit)}</strong></td></tr>`).join('')||`<tr><td colspan="5"><div class="empty-team"><strong>No Inventory Manager transactions for this day.</strong><span>New activity will appear here automatically.</span></div></td></tr>`}</tbody></table></div>
-    <div class="tm-feed"><div class="tm-feed-head"><strong>Transaction feed</strong><span>${todayRows.length ? 'Newest activity first' : 'Waiting for activity'}</span></div>${todayRows.slice().sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0)).map(r=>{ const actorEmail=String(r.byEmail||r.actorEmail||'').trim(); const actorRole=roleLabel(r.byRole||r.actorRole||'inventory_manager'); const requester=r.requestId&&r.requestedByEmail?` · Requested by ${personRef(r.requestedByEmail,r.requestedByRole||'stock_requester',r.requestedByName||'')}`:''; const origin=transactionOriginShort(r); const when=formatDate(r.createdAt); const audit=(membership?.role==='transaction_manager'&&(r.editCount||r.editedAt||r.deleted))?`<button class="small-action audit-view-btn tm-feed-audit" data-tm-revision="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">View changes</button>`:''; return `<div class="tm-feed-row ${r.type==='receive'?'tm-feed-receive':'tm-feed-dispatch'}"><span class="tm-feed-type ${r.type==='receive'?'in':'out'}">${r.type==='receive'?'IN':'OUT'}</span><div class="tm-feed-main"><strong>${escapeHtml(r.itemName)} <span class="tm-origin-pill ${origin.toLowerCase()}">${origin}</span></strong><span>${r.type==='receive'?'+':'−'}${formatQty(r.quantity)} ${escapeHtml(r.unit)}${r.department?` · ${escapeHtml(r.department)}`:''}</span><small>${escapeHtml(personRef(actorEmail,r.byRole||r.actorRole||'inventory_manager',r.byName||''))} · ${escapeHtml(when)}${requester}${r.editedAt?' · EDITED':''}${r.deleted?' · DELETED':''}</small></div>${audit}</div>`;}).join('')||'<div class="empty-team">No transactions recorded yet.</div>'}</div>
+    <div class="tm-live-summary tm-live-summary-compact"><div><span>Transactions</span><strong>${todayRows.length}</strong><small>Receiving & dispatch entries</small></div><div><span>Items moved</span><strong>${new Set(todayRows.map(r=>r.itemId)).size}</strong><small>Different goods</small></div></div>
+    <div class="tm-live-table-wrap"><table class="tm-live-table"><thead><tr><th>Good</th><th>Opening</th><th>Received</th><th>Dispatched</th><th>Closing</th></tr></thead><tbody>${reports.map(x=>`<tr><td><strong>${escapeHtml(x.itemName)}</strong><small>${escapeHtml(x.unit)}</small></td><td>${formatQty(x.opening)} ${escapeHtml(x.unit)}</td><td class="tm-in">+${formatQty(x.received)} ${escapeHtml(x.unit)}</td><td class="tm-out">−${formatQty(x.dispatched)} ${escapeHtml(x.unit)}</td><td><strong>${formatQty(x.closing)} ${escapeHtml(x.unit)}</strong></td></tr>`).join('')||`<tr><td colspan="5"><div class="empty-team"><strong>No receiving or dispatch activity for this day.</strong><span>New activity will appear here automatically.</span></div></td></tr>`}</tbody></table></div>
+    <div class="tm-feed"><div class="tm-feed-head"><strong>Transaction feed</strong><span>${todayRows.length ? 'Newest activity first' : 'Waiting for activity'}</span></div>${todayRows.slice().sort((a,b)=>(b.createdAt?.toMillis?.()||0)-(a.createdAt?.toMillis?.()||0)).map(r=>{ const isReceive=isReceiveMovement(r); const actorEmail=String(r.byEmail||r.actorEmail||'').trim(); const actorRole=roleLabel(r.byRole||r.actorRole||''); const requester=r.requestId&&r.requestedByEmail?` · Requested by ${personRef(r.requestedByEmail,r.requestedByRole||'stock_requester',r.requestedByName||'')}`:''; const origin=transactionOriginShort(r); const when=formatDate(r.createdAt); const audit=(membership?.role==='transaction_manager'&&(r.editCount||r.editedAt||r.deleted))?`<button class="small-action audit-view-btn tm-feed-audit" data-open-revisions="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">View changes</button>`:''; return `<div class="tm-feed-row ${isReceive?'tm-feed-receive':'tm-feed-dispatch'}"><span class="tm-feed-type ${isReceive?'in':'out'}">${isReceive?'IN':'OUT'}</span><div class="tm-feed-main"><strong>${escapeHtml(r.itemName)} <span class="tm-origin-pill ${origin.toLowerCase().replace(/\s+/g,'-')}">${origin}</span></strong><span>${isReceive?'+':'−'}${formatQty(r.quantity)} ${escapeHtml(r.unit)}${r.department?` · ${escapeHtml(r.department)}`:''}</span><small>${escapeHtml(personRef(actorEmail,r.byRole||r.actorRole||'',r.byName||''))} · ${escapeHtml(when)}${requester}${r.editedAt?' · EDITED':''}${r.deleted?' · DELETED':''}</small></div>${audit}</div>`;}).join('')||'<div class="empty-team">No transactions recorded yet.</div>'}</div>
     <div class="tm-lock-note">🔒 ${live?'Today remains live until the date changes. At midnight, this report becomes a finished locked record and the new day starts with the previous closing balances as its opening basis.':'This finished report is locked because the selected date has passed.'}</div>`;
+  target.querySelectorAll('[data-open-revisions]').forEach(btn=>btn.addEventListener('click',()=>{ const [itemId,movementId]=String(btn.dataset.openRevisions||'').split(':'); if(itemId&&movementId) openRevisionPage(itemId,movementId); }));
 }
 
-function openRevisionViewer(revisions,currentMovement=null){
-  const old=document.getElementById('revision-viewer-modal'); if(old) old.remove();
-  const overlay=document.createElement('div'); overlay.id='revision-viewer-modal'; overlay.className='modal-overlay revision-overlay';
-  const current=currentMovement||{};
-  const currentBox=current.id?`<section class="revision-current-box"><div class="revision-current-head"><div><span class="revision-current-label">CURRENT SAVED DATA</span><strong>${escapeHtml(current.itemName||'Transaction')}</strong></div><span class="history-audit-pill ${current.deleted?'deleted':'edited'}">${current.deleted?'DELETED':'CURRENT'}</span></div><div class="revision-grid"><div><small>Quantity</small><strong>${escapeHtml(String(current.quantity??0))} ${escapeHtml(current.unit||'')}</strong></div><div><small>Type</small><strong>${escapeHtml(movementLabel(current.type||''))}</strong></div><div><small>Department</small><strong>${escapeHtml(current.department||'—')}</strong></div><div><small>Note</small><strong>${escapeHtml(current.note||'—')}</strong></div></div></section>`:'';
-  const accessNotice=current.revisionReadError?`<div class="error-box">${escapeHtml(current.revisionReadError)}</div>`:'';
-  const rows=revisions.map((r,i)=>`<article class="revision-card">
-    <div class="revision-top"><div><span class="revision-action ${escapeHtml(r.action||'edit')}">${escapeHtml(r.action==='delete'?'DELETED':'EDITED · Revision '+(r.version||i+1))}</span></div><strong>${escapeHtml(formatDate(r.changedAt))}</strong></div>
-    <div class="revision-by">Changed by <strong>${escapeHtml(personRef(r.changedByEmail||'', r.changedByRole||''))}</strong></div>
-    <div class="revision-grid">
-      <div><small>Previous quantity</small><strong>${escapeHtml(String(r.previousQuantity??0))} ${escapeHtml(r.previousUnit||'')}</strong></div>
-      <div><small>Previous type</small><strong>${escapeHtml(movementLabel(r.previousType||''))}</strong></div>
-      <div><small>Previous department</small><strong>${escapeHtml(r.previousDepartment||'—')}</strong></div>
-      <div><small>Previous note</small><strong>${escapeHtml(r.previousNote||'—')}</strong></div>
-    </div>
-    <div class="revision-original"><span>Original owner</span><strong>${escapeHtml(personRef(r.previousByEmail||'', r.previousByRole||''))}</strong></div>
-  </article>`).join('');
-  overlay.innerHTML=`<div class="revision-modal" role="dialog" aria-modal="true"><div class="revision-modal-head"><div><p class="eyebrow">Audit trail</p><h2>Transaction changes</h2><p>This view is available to the transaction owner, Admin and Transaction Manager. It shows who changed the record and what the previous saved data was.</p></div><button class="modal-close" id="revision-close" type="button">×</button></div><div class="revision-list">${accessNotice}${currentBox}${rows||'<div class="empty-team"><div class="empty-icon">🧾</div><strong>No previous versions recorded</strong><span>No edit or delete revision has been recorded for this transaction.</span></div>'}</div><div class="revision-modal-foot"><button class="btn btn-secondary" id="revision-close-bottom" type="button">Close</button></div></div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#revision-close').onclick=()=>overlay.remove(); overlay.querySelector('#revision-close-bottom').onclick=()=>overlay.remove(); overlay.onclick=e=>{if(e.target===overlay)overlay.remove();};
+function revisionUrl(itemId,movementId){
+  const url=new URL(location.href);
+  url.searchParams.set('transactionChanges', `${itemId}:${movementId}`);
+  return url.toString();
+}
+
+function openRevisionPage(itemId,movementId){
+  // Audit details are an internal Inventro page, not a separate browser tab.
+  // Push a real SPA history entry so Android/browser Back returns to the
+  // exact History workspace that opened this transaction.
+  const url=revisionUrl(itemId,movementId);
+  const state={inventro:true,view:'revision',revisionTarget:`${itemId}:${movementId}`,
+    returnHistoryRole:history.state?.historyRole||null};
+  history.pushState(state,'',url);
+  view='revision';
+  render();
+  return true;
+}
+
+async function renderRevisionPage(){
+  const target=String(history.state?.revisionTarget || new URLSearchParams(location.search).get('transactionChanges')||'');
+  const [itemId,movementId]=target.split(':');
+  if(!itemId||!movementId){
+    view='home';
+    history.replaceState({inventro:true,view:'home'},'',location.pathname+location.hash);
+    render();
+    return;
+  }
+  root.innerHTML=`<div class="dashboard feature-page revision-page"><div class="topbar"><button class="back-btn" id="revision-page-back">‹ Back</button><div class="topbar-brand">Inventro</div></div><section class="feature-header"><p class="eyebrow">Audit trail</p><h1>Transaction changes</h1><p>Previous saved versions of this transaction are shown here. Use Android/browser Back to return to the exact History page.</p></section><section class="admin-card" id="revision-page-content"><div class="loading-screen"><div class="loading-orbit"><span></span><span></span><span></span></div><div class="loading-brand">Inventro</div><h2>Loading transaction changes</h2><p>Please wait while the audit record is loaded.</p></div></section></div>`;
+  const leave=()=>{ history.back(); };
+  root.querySelector('#revision-page-back').addEventListener('click',leave);
+  try{
+    const companyId=currentCompanyId();
+    const ref=doc(db,'companies',companyId,'items',itemId,'movements',movementId);
+    const currentSnap=await getDoc(ref);
+    const current=currentSnap.exists()?{id:movementId,...currentSnap.data()}:null;
+    if(!current){
+      root.querySelector('#revision-page-content').innerHTML='<div class="empty-team"><div class="empty-icon">🧾</div><strong>Transaction not found</strong><span>This transaction may have been deleted or is no longer available.</span></div>';
+      return;
+    }
+    if(!canViewRevisionDetails(current)){
+      root.querySelector('#revision-page-content').innerHTML='<div class="error-box">You do not have permission to view the changes for this transaction.</div>';
+      return;
+    }
+    let revisions=[];
+    let revisionError='';
+    try{ revisions=await listMovementRevisions(itemId,movementId); }
+    catch(err){ revisionError=friendlyError(err); }
+    const currentBox=`<section class="revision-current-box"><div class="revision-current-head"><div><span class="revision-current-label">CURRENT SAVED DATA</span><strong>${escapeHtml(current.itemName||'Transaction')}</strong></div><span class="history-audit-pill ${current.deleted?'deleted':'edited'}">${current.deleted?'DELETED':'CURRENT'}</span></div><div class="revision-grid"><div><small>Quantity</small><strong>${escapeHtml(String(current.quantity??0))} ${escapeHtml(current.unit||'')}</strong></div><div><small>Type</small><strong>${escapeHtml(movementLabel(current.type||''))}</strong></div><div><small>Department</small><strong>${escapeHtml(current.department||'—')}</strong></div><div><small>Note</small><strong>${escapeHtml(current.note||'—')}</strong></div></div></section>`;
+    const rows=revisions.map((r,i)=>`<article class="revision-card"><div class="revision-top"><div><span class="revision-action ${escapeHtml(r.action||'edit')}">${escapeHtml(r.action==='delete'?'DELETED':'EDITED · Revision '+(r.version||i+1))}</span></div><strong>${escapeHtml(formatDate(r.changedAt))}</strong></div><div class="revision-by">Changed by <strong>${escapeHtml(personRef(r.changedByEmail||'',r.changedByRole||''))}</strong></div><div class="revision-grid"><div><small>Previous quantity</small><strong>${escapeHtml(String(r.previousQuantity??0))} ${escapeHtml(r.previousUnit||'')}</strong></div><div><small>Previous type</small><strong>${escapeHtml(movementLabel(r.previousType||''))}</strong></div><div><small>Previous department</small><strong>${escapeHtml(r.previousDepartment||'—')}</strong></div><div><small>Previous note</small><strong>${escapeHtml(r.previousNote||'—')}</strong></div></div><div class="revision-original"><span>Original owner</span><strong>${escapeHtml(personRef(r.previousByEmail||'',r.previousByRole||''))}</strong></div></article>`).join('');
+    root.querySelector('#revision-page-content').innerHTML=`${revisionError?`<div class="error-box">${escapeHtml(revisionError)}</div>`:''}${currentBox}<div class="revision-list">${rows||'<div class="empty-team"><div class="empty-icon">🧾</div><strong>No previous versions recorded</strong><span>No edit or delete revision has been recorded for this transaction.</span></div>'}</div>`;
+  }catch(err){
+    root.querySelector('#revision-page-content').innerHTML=`<div class="error-box">${escapeHtml(friendlyError(err))}</div>`;
+  }
 }
 
 function canViewRevisionDetails(row){
@@ -2790,8 +2893,11 @@ async function renderHistory(forcedRole=null){
         .sort((a,b)=>(b.time?.toMillis?.()||0)-(a.time?.toMillis?.()||0));
     }
     if(selectedRole==='inventory_manager'){
-      // Inventory Manager log book is the physical stock ledger: receiving and dispatching.
-      return rows.filter(r=>movementActorRole(r)==='inventory_manager').map(r=>({kind:'movement',time:r.createdAt,...r})).sort((a,b)=>(b.time?.toMillis?.()||0)-(a.time?.toMillis?.()||0));
+      // Physical stock ledger includes Admin-created initial receipts so the
+      // first quantity is visible as a real receipt, followed by Manager moves.
+      return rows.filter(r=>movementActorRole(r)==='inventory_manager' ||
+        (isReceiveMovement(r) && movementActorRole(r)==='admin' && (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening')))
+        .map(r=>({kind:'movement',time:r.createdAt,...r})).sort((a,b)=>(b.time?.toMillis?.()||0)-(a.time?.toMillis?.()||0));
     }
         // Admin is intentionally not an account card anymore. Keep this fallback for non-card callers.
     const movementRows=rows.filter(r=>r.actorRole===selectedRole).map(r=>({kind:'movement',time:r.createdAt,...r}));
@@ -2805,10 +2911,10 @@ async function renderHistory(forcedRole=null){
     const statement=root.querySelector('#daily-statement');
     if(statement){
       if(selectedRole==='transaction_manager'){
-        const day=opts.day||today; const dayRows=rows.filter(r=>movementActorRole(r)==='inventory_manager' && isDate(r.createdAt,day));
-        const before=rows.filter(r=>movementActorRole(r)==='inventory_manager' && (r.createdAt?.toMillis?.()||0) < new Date(`${day}T00:00:00`).getTime());
+        const day=opts.day||today; const dayRows=rows.filter(r=>(movementActorRole(r)==='inventory_manager' || (isReceiveMovement(r) && movementActorRole(r)==='admin' && (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening'))) && isDate(r.createdAt,day));
+        const before=rows.filter(r=>(movementActorRole(r)==='inventory_manager' || (isReceiveMovement(r) && movementActorRole(r)==='admin' && (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening'))) && (r.createdAt?.toMillis?.()||0) < new Date(`${day}T00:00:00`).getTime());
         const ids=[...new Set([...before,...dayRows].map(r=>r.itemId))];
-        const statements=ids.map(id=>{const allBefore=before.filter(r=>r.itemId===id);const todayRows=dayRows.filter(r=>r.itemId===id);const itemName=(todayRows[0]||allBefore[0])?.itemName||id;const unit=(todayRows[0]||allBefore[0])?.unit||'';let opening=0;for(const r of allBefore){const n=Number(r.quantity||0);if(r.type==='opening'||r.type==='receive')opening+=n;else if(r.type==='dispatch')opening-=n;}let received=0,dispatched=0;for(const r of todayRows){const n=Number(r.quantity||0);if(r.type==='receive')received+=n;else if(r.type==='dispatch')dispatched+=n;}return {itemName,unit,opening,received,dispatched,closing:opening+received-dispatched};}).filter(x=>x.opening||x.received||x.dispatched);
+        const statements=ids.map(id=>{const allBefore=before.filter(r=>r.itemId===id);const todayRows=dayRows.filter(r=>r.itemId===id);const initial=todayRows.filter(r=>isReceiveMovement(r)&&movementActorRole(r)==='admin'&&(r.isInitialReceipt===true||r.source==='admin_item_creation'||r.type==='opening'));const initialQty=initial.reduce((a,r)=>a+Number(r.quantity||0),0);const itemName=(todayRows[0]||allBefore[0])?.itemName||id;const unit=(todayRows[0]||allBefore[0])?.unit||'';let opening=0;for(const r of allBefore){opening+=movementSignedQuantity(r);}let received=0,dispatched=0;for(const r of todayRows){const n=Number(r.quantity||0);if(isReceiveMovement(r))received+=n;else if(effectiveMovementType(r)==='dispatch')dispatched+=n;}return {itemName,unit,opening,received,dispatched,closing:opening+received-dispatched};}).filter(x=>x.opening||x.received||x.dispatched);
         statement.hidden=false; statement.innerHTML=`<div class="daily-statement-head"><div><strong>📘 Daily transaction statement</strong><span>${escapeHtml(day)} · Closing balance becomes the next day's opening balance.</span></div></div><div class="statement-grid">${statements.map(x=>`<div class="statement-row"><strong>${escapeHtml(x.itemName)}</strong><span>Opening <b>${x.opening} ${escapeHtml(x.unit)}</b></span><span>Received <b>+${x.received} ${escapeHtml(x.unit)}</b></span><span>Dispatched <b>−${x.dispatched} ${escapeHtml(x.unit)}</b></span><span>Closing <b>${x.closing} ${escapeHtml(x.unit)}</b></span></div>`).join('')||'<div class="empty-team">No transaction statement for this day.</div>'}</div>`;
       }else statement.hidden=true;
     }
@@ -2817,8 +2923,8 @@ async function renderHistory(forcedRole=null){
       const type=root.querySelector('#history-type')?.value||'all';
       const dept=root.querySelector('#history-department')?.value||'all';
       if(dept!=='all' && (r.department||'')!==dept)return false;
-      if(type==='received' && !(r.kind==='movement'&&r.type==='receive'))return false;
-      if(type==='dispatched' && !(r.kind==='movement'&&r.type==='dispatch'))return false;
+      if(type==='received' && !(r.kind==='movement'&&isReceiveMovement(r)))return false;
+      if(type==='dispatched' && !(r.kind==='movement'&&effectiveMovementType(r)==='dispatch'))return false;
       if(type==='requested-dispatch' && !(r.kind==='movement'&&r.type==='dispatch'&&r.requestId))return false;
       if(type.startsWith('request-')){
         const requestedStatus=type.slice(8)==='dispatched'?'fulfilled':type.slice(8);
@@ -2843,7 +2949,7 @@ async function renderHistory(forcedRole=null){
       const movementPill = r.type==='receive' ? 'RECEIVED' : r.type==='dispatch' ? (r.requestId ? 'DISPATCHED · REQUEST' : 'DISPATCHED') : 'OPENING';
       const canSeeAudit=canViewRevisionDetails(r);
       const auditText=r.deleted?' · DELETED':r.editedAt?' · EDITED':'';
-      const auditButton=(canSeeAudit && (r.editCount||r.editedAt||r.deleted))?`<button class="small-action audit-view-btn" data-view-revisions="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">View changes${r.editCount?` (${escapeHtml(String(r.editCount))})`:''}</button>`:'';
+      const auditButton=(canSeeAudit && (r.editCount||r.editedAt||r.deleted))?`<button class="small-action audit-view-btn" data-open-revisions="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">View changes${r.editCount?` (${escapeHtml(String(r.editCount))})`:''}</button>`:'';
       return `<article class="history-row movement-row ${movementClass} ${r.deleted?'movement-deleted':''}"><div class="history-icon">${movementIcon}</div><div class="history-main"><strong>${escapeHtml(r.itemName)} <span class="history-status-pill movement ${movementClass}">${movementPill}</span>${selectedRole==='transaction_manager'?`<span class="tm-origin-pill ${transactionOriginShort(r).toLowerCase()}">${transactionOriginLabel(r)}</span>`:''}${r.deleted?'<span class="history-audit-pill deleted">DELETED</span>':r.editedAt?'<span class="history-audit-pill edited">EDITED</span>':''}</strong><span>${escapeHtml(label)} ${r.quantity} ${escapeHtml(r.unit)}${r.department?` · Department: ${escapeHtml(r.department)}`:''}</span><small>${escapeHtml(personRef(r.byEmail||'', r.actorRole||r.byRole||'', r.byName||''))} · ${escapeHtml(formatDate(r.createdAt))}${requested}${r.note?' · '+escapeHtml(r.note):''}${canSeeAudit&&r.editedAt?' · Edited '+escapeHtml(formatDate(r.editedAt))+` by ${escapeHtml(personRef(r.editedByEmail||'', r.editedByRole||r.actorRole||'', r.editedByName||''))}`:''}${canSeeAudit&&r.deletedAt?' · Deleted '+escapeHtml(formatDate(r.deletedAt))+` by ${escapeHtml(personRef(r.deletedByEmail||'', r.deletedByRole||r.actorRole||'', r.deletedByName||''))}`:''}</small></div><div class="history-actions">${auditButton}${canEditMovementRow(r)&&!r.deleted?`<button class="small-action" data-edit-movement="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">Edit</button><button class="small-action reject" data-delete-movement="${escapeHtml(r.itemId)}:${escapeHtml(r.id)}" type="button">Delete</button>`:''}</div></article>`;
     }).join('')||`<div class="empty-team"><div class="empty-icon">🕘</div><strong>No matching log entries</strong><span>Try another date or filter.</span></div>`;
     attachHistoryActions();
@@ -2895,8 +3001,12 @@ async function renderHistory(forcedRole=null){
       if(serial!==refreshSerial) return;
       let list=buildList();
       if(isStockRequesterRole(role)) list=list.filter(r=>(r.kind==='request') || (r.kind==='movement'&&r.type==='dispatch'&&r.requestId));
-      if(role==='inventory_manager') list=list.filter(r=>r.kind==='movement'&&(r.type==='receive'||r.type==='dispatch'));
-      if(role==='transaction_manager') list=list.filter(r=>(r.kind==='movement'&&movementActorRole(r)==='inventory_manager') || (r.kind==='request'&&r.requestedByUid===auth.currentUser?.uid));
+      if(role==='inventory_manager') list=list.filter(r=>r.kind==='movement' &&
+        (effectiveMovementType(r)==='receive'||effectiveMovementType(r)==='dispatch'));
+      if(role==='transaction_manager') list=list.filter(r=>
+        (r.kind==='movement' && (movementActorRole(r)==='inventory_manager' ||
+          (isReceiveMovement(r) && movementActorRole(r)==='admin' && (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening')))) ||
+        (r.kind==='request'&&r.requestedByUid===auth.currentUser?.uid));
       renderRows(list,{day:selectedDay});
       if(selectedRole==='transaction_manager') {
         const activity=root.querySelector('#history-type')?.value||'all';
@@ -2908,7 +3018,7 @@ async function renderHistory(forcedRole=null){
     }
   };
   const attachHistoryActions=()=>{
-    root.querySelectorAll('[data-view-revisions]').forEach(btn=>btn.addEventListener('click',async()=>{const [itemId,movementId]=btn.dataset.viewRevisions.split(':');btn.disabled=true;try{let revisions=[];let revisionError='';try{revisions=await listMovementRevisions(itemId,movementId);}catch(err){revisionError=friendlyError(err);}const currentSnap=await getDoc(doc(db,'companies',currentCompanyId(),'items',itemId,'movements',movementId));openRevisionViewer(revisions,currentSnap.exists()?{id:movementId,...currentSnap.data(),revisionReadError:revisionError}:null);if(revisionError)showTemporaryMessage(revisionError,'error');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{btn.disabled=false;}}));
+    root.querySelectorAll('[data-open-revisions]').forEach(btn=>btn.addEventListener('click',()=>{const [itemId,movementId]=btn.dataset.openRevisions.split(':');openRevisionPage(itemId,movementId);}));
     root.querySelectorAll('[data-edit-movement]').forEach(btn=>btn.addEventListener('click',async()=>{const [itemId,movementId]=btn.dataset.editMovement.split(':');const row=rows.find(x=>x.itemId===itemId&&x.id===movementId);if(!row)return;const type=prompt('Movement type: opening, receive, or dispatch',row.type);if(type===null)return;const qty=prompt('Correct quantity',String(row.quantity));if(qty===null)return;const note=prompt('Correct note (optional)',row.note||'');if(note===null)return;btn.disabled=true;try{await editMovement(itemId,movementId,{type:type.trim().toLowerCase(),quantity:qty,note});showTemporaryMessage('History corrected and stock recalculated.','success');await renderHistory();}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));
     root.querySelectorAll('[data-delete-movement]').forEach(btn=>btn.addEventListener('click',async()=>{const [itemId,movementId]=btn.dataset.deleteMovement.split(':');if(!confirm('Delete this history entry and recalculate the item stock?'))return;btn.disabled=true;try{await deleteMovement(itemId,movementId);showTemporaryMessage('History entry deleted and stock recalculated.','success');await renderHistory();}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));
   };
@@ -2969,13 +3079,17 @@ async function renderStats(){
   const role=membership?.role||'';
   const ownRequests = requests.filter(r=>r.requestedByUid===auth.currentUser?.uid || normalizedRole(r.requestedByRole)===normalizedRole(role));
   const activeRows=rows.filter(r=>r.deleted!==true && r.active!==false);
-  const roleRows = role==='inventory_manager' ? activeRows.filter(r=>movementActorRole(r)==='inventory_manager')
-    : isStockRequesterRole(role) ? activeRows.filter(r=>isStockRequesterRole(r.actorRole) || (r.type==='dispatch' && r.requestedByUid===auth.currentUser?.uid))
-    : role==='transaction_manager' ? activeRows.filter(r=>movementActorRole(r)==='inventory_manager' || r.requestedByUid===auth.currentUser?.uid || r.requestedByRole==='transaction_manager')
+  const initialAdminReceipts = activeRows.filter(r=>
+    isReceiveMovement(r) && movementActorRole(r)==='admin' &&
+    (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening')
+  );
+  const roleRows = role==='inventory_manager' ? [...activeRows.filter(r=>movementActorRole(r)==='inventory_manager'), ...initialAdminReceipts]
+    : isStockRequesterRole(role) ? [...activeRows.filter(r=>isStockRequesterRole(r.actorRole) || (effectiveMovementType(r)==='dispatch' && r.requestedByUid===auth.currentUser?.uid)), ...initialAdminReceipts]
+    : role==='transaction_manager' ? [...activeRows.filter(r=>movementActorRole(r)==='inventory_manager' || r.requestedByUid===auth.currentUser?.uid || r.requestedByRole==='transaction_manager'), ...initialAdminReceipts]
     : activeRows;
   const visibleRequests = role==='admin' || role==='inventory_manager' ? requests : ownRequests;
-  const received=roleRows.filter(r=>r.type==='receive');
-  const dispatched=roleRows.filter(r=>r.type==='dispatch');
+  const received=roleRows.filter(isReceiveMovement);
+  const dispatched=roleRows.filter(r=>effectiveMovementType(r)==='dispatch');
   const pendingReq=visibleRequests.filter(r=>r.status==='pending');
   const approvedReq=visibleRequests.filter(r=>r.status==='approved');
   const fulfilledReq=visibleRequests.filter(r=>r.status==='fulfilled');
@@ -3395,6 +3509,9 @@ function render() {
     case 'logbook':
       renderHistory();
       break;
+    case 'revision':
+      renderRevisionPage();
+      break;
     case 'admin':
       renderAdmin();
       break;
@@ -3450,8 +3567,11 @@ onAuthStateChanged(auth, async (user) => {
     startRequestBadgeListener(); startRealtimeSync();
   }
 
+  const revisionTarget = new URLSearchParams(location.search).get('transactionChanges');
   if (membership) {
-    if (membership.role === 'admin') {
+    if (revisionTarget) {
+      view = 'revision';
+    } else if (membership.role === 'admin') {
       view = 'home';
     } else if (isEmployeeCodeVerified(membership.companyId)) {
       view = 'home';
@@ -3464,7 +3584,7 @@ onAuthStateChanged(auth, async (user) => {
 
   // The first authenticated screen becomes the real SPA history root. This
   // prevents Android Back from returning to the pre-auth 'loading' entry.
-  history.replaceState({ inventro: true, view }, '', location.href);
+  history.replaceState({ inventro: true, view, revisionTarget: revisionTarget || null }, '', location.href);
   render();
 });
 
