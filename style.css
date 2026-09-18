@@ -1775,3 +1775,17 @@ html, body, #app { max-width:100%; overflow-x:hidden; }
   .stock-request-tab-panel{padding:11px}
   .stock-request-panel-head h2{font-size:15px}
 }
+/* v88 — transaction changes is a first-class Inventro page, not a modal or new browser tab. */
+.revision-page{min-height:100%;background:var(--bg,#f4f7fb)}
+.revision-page .feature-header{max-width:980px;margin:0 auto;padding-left:20px;padding-right:20px}
+.revision-page .revision-page-shell{max-width:980px;margin:0 auto;padding:0 20px 32px}
+.revision-page #revision-page-content{max-width:980px;margin:0 auto;padding:20px}
+.revision-page .revision-current-box{margin-bottom:18px}
+.revision-page .revision-list{padding:0}
+.revision-page .revision-card{background:#fff;box-shadow:0 4px 16px rgba(15,38,64,.05)}
+.revision-page .revision-page-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+@media(max-width:620px){
+  .revision-page .feature-header{padding-left:14px;padding-right:14px}
+  .revision-page #revision-page-content{margin:0 14px;padding:14px}
+  .revision-page .revision-card{padding:13px}
+}
