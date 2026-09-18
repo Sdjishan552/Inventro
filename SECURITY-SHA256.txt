@@ -1,16 +1,12 @@
 # Inventro — file checksums (SHA-256)
-# Regenerated 2026-09-18 during the second verification pass.
-# Unlike the previous manifest, this one includes the Rules test file
-# (previously omitted) and reflects the firestore.rules / package.json /
-# tests/firestore.rules.test.js / SECURITY-AUDIT.md / SECURITY-SETUP.md
-# changes made in that pass. app.js, style.css, index.html, manifest.json,
-# firebase.json and sw.js are unchanged from the prior package, so their
-# hashes are unchanged too.
+# Regenerated 2026-09-18 after reducing the live movement window to 2 days.
+# app.js and SECURITY-AUDIT.md changed in this round; everything else is
+# carried over unchanged from the second verification pass.
 #
 # This file cannot list a correct hash of itself (the hash would change
 # the moment it's written), so there is intentionally no self-entry.
 
-af0bac6f4a3d20385e66f01ac68dd14d5525cbc0f74d2fbffff81dd432b63971  /mnt/data/Inventro-security-hardened/app.js
+7aedfa03123d40e7ee3a53c713e7eaef62d56e783291a94abb700cdb65f36abc  /mnt/data/Inventro-security-hardened/app.js
 31ff3407b35f62d2abd8b1829a76803e93745f03a33181326b3356e310ce2691  /mnt/data/Inventro-security-hardened/firebase.json
 d54845cc5fc1224279527533803cf1078101f091a31178c9dde79c38dfa9e0f7  /mnt/data/Inventro-security-hardened/firestore.rules
 343cf637f3d587ac1a28010b3a7d883fd4fe9a4103a55713b083aad320b73f7f  /mnt/data/Inventro-security-hardened/index.html
@@ -19,5 +15,5 @@ ce05ba47f6ad89ff8d2cbabdd33367e9155539318a16c588a7f58f3ff0625a0a  /mnt/data/Inve
 a4591f4f695fa883e374cfab26a4bed8ea937299a1bb630995a60fa16d6aef68  /mnt/data/Inventro-security-hardened/style.css
 df500f17ef14e9a7dd0b9bc8ff953b5d7f4251b192a5c7cf03f47b4e50776eb5  /mnt/data/Inventro-security-hardened/sw.js
 37ddd35e4eb431d07d5697e0f026bbcb0d5e0f4d58a1a6e36e5486ad564c38cf  /mnt/data/Inventro-security-hardened/tests/firestore.rules.test.js
-4d110cbd4899baf13d474a535eafa0cbf62c59a4aa3ca52105baafdeab149fa5  /mnt/data/Inventro-security-hardened/SECURITY-AUDIT.md
+29f51c355432ed1559a117a6d5dd572efd8fd31d662edae01227bc52b9d23881  /mnt/data/Inventro-security-hardened/SECURITY-AUDIT.md
 909a9d67ff602cf3d17e84665b8a3b436120ce06ff690359962793c37aafbfd5  /mnt/data/Inventro-security-hardened/SECURITY-SETUP.md
