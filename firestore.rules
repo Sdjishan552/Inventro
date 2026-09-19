@@ -35,6 +35,13 @@ service cloud.firestore {
         && get(myEmployeePath(companyId)).data.status == 'active';
     }
 
+    function isCashRecorderOf(companyId) {
+      return signedIn() && myEmployeeExists(companyId)
+        && get(myEmployeePath(companyId)).data.uid == myUid()
+        && get(myEmployeePath(companyId)).data.role in ['inventory_manager','cashier']
+        && get(myEmployeePath(companyId)).data.status == 'active';
+    }
+
     function isRequestCreatorRole(companyId) {
       return signedIn() && myEmployeeExists(companyId)
         && get(myEmployeePath(companyId)).data.uid == myUid()
@@ -50,7 +57,7 @@ service cloud.firestore {
     }
 
     function isAllowedEmployeeRole(role) {
-      return role in ['inventory_manager','transaction_manager','stock_requester','chef','request'];
+      return role in ['inventory_manager','transaction_manager','cashier','stock_requester','chef','request'];
     }
 
     function isActiveOrInvitedEmployeeForCompany(companyId) {
@@ -159,6 +166,69 @@ service cloud.firestore {
           && request.resource.data.name is string;
         allow update: if false;
         allow delete: if isAdminOf(companyId);
+      }
+
+
+      match /cashDepartments/{departmentId} {
+        allow read: if isActiveMemberOf(companyId);
+        allow create: if isAdminOf(companyId)
+          && request.resource.data.createdByUid == myUid()
+          && request.resource.data.name is string;
+        allow update: if false;
+        allow delete: if isAdminOf(companyId);
+      }
+
+      match /cashTransactions/{transactionId} {
+        allow read: if isActiveMemberOf(companyId);
+
+        allow create: if isCashRecorderOf(companyId)
+          && request.resource.data.dateKey is string
+                    && request.resource.data.type in ['received','outflow']
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.department is string
+          && request.resource.data.byUid == myUid()
+          && request.resource.data.byEmail == myEmail()
+          && request.resource.data.byRole == get(myEmployeePath(companyId)).data.role
+          && request.resource.data.active == true
+          && request.resource.data.deleted == false
+          && request.resource.data.editCount == 0;
+
+        allow update: if isInventoryManagerOf(companyId)
+          && resource.data.active == true
+          && resource.data.deleted == false
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'type','amount','department','note','editedAt','editedByUid','editedByEmail','editedByRole','editCount'
+          ])
+          && request.resource.data.type in ['received','outflow']
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.department is string
+          && request.resource.data.byUid == resource.data.byUid
+          && request.resource.data.byEmail == resource.data.byEmail
+          && request.resource.data.byRole == resource.data.byRole
+          && request.resource.data.dateKey == resource.data.dateKey
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.active == true
+          && request.resource.data.deleted == false
+          && request.resource.data.editedByUid == myUid()
+          && request.resource.data.editedByEmail == myEmail()
+          && request.resource.data.editedByRole == get(myEmployeePath(companyId)).data.role
+          && request.resource.data.editCount == (resource.data.editCount is number ? resource.data.editCount + 1 : 1);
+
+        allow delete: if false;
+
+        match /revisions/{revisionId} {
+          allow read: if isActiveMemberOf(companyId);
+          allow create: if isInventoryManagerOf(companyId)
+            && get(/databases/$(database)/documents/companies/$(companyId)/cashTransactions/$(transactionId)).data.active == true
+            && request.resource.data.changedByUid == myUid()
+            && request.resource.data.changedByEmail == myEmail()
+            && request.resource.data.changedByRole == get(myEmployeePath(companyId)).data.role
+            && request.resource.data.action == 'edit'
+            && request.resource.data.version is number;
+          allow update, delete: if false;
+        }
       }
 
       match /orderLists/{dateKey} {
