@@ -1,4 +1,4 @@
-const CACHE = 'inventro-shell-v115-page-slide';
+const CACHE = 'inventro-shell-v116-wide-fix';
 
 const CORE = [
   './',
@@ -22,8 +22,8 @@ self.addEventListener('activate', event => {
       .then(keys =>
         Promise.all(
           keys
-            .filter(k => k !== CACHE)
-            .map(k => caches.delete(k))
+            .filter(key => key !== CACHE)
+            .map(key => caches.delete(key))
         )
       )
       .then(() => self.clients.claim())
@@ -31,20 +31,24 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
+  const request = event.request;
+  const url = new URL(request.url);
 
-  if (event.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (request.method !== 'GET' || url.origin !== location.origin) return;
 
   event.respondWith(
-    fetch(event.request)
+    fetch(request, { cache: 'no-store' })
       .then(response => {
-        const copy = response.clone();
-        caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        if (response && response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => {});
+        }
         return response;
       })
       .catch(() =>
-        caches.match(event.request)
-          .then(r => r || caches.match('./index.html'))
+        caches.match(request).then(cached =>
+          cached || caches.match('./index.html')
+        )
       )
   );
 });
