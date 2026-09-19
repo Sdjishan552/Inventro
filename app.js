@@ -1320,6 +1320,440 @@ function showTemporaryMessage(message, type = 'info') {
 // ---------------- UI ----------------
 
 
+
+/* =========================================================
+   INVENTRO LANGUAGE SYSTEM — English / বাংলা
+   Stored per device/browser and available to every account.
+   ========================================================= */
+const LANGUAGE_KEY = 'inventroLanguage';
+
+const BN = {
+  'Inventro':'ইনভেন্ট্রো',
+  'Company workspace':'কোম্পানি ওয়ার্কস্পেস',
+  'Welcome':'স্বাগতম',
+  'Quick access':'দ্রুত অ্যাক্সেস',
+  'Active':'সক্রিয়',
+  'Admin':'অ্যাডমিন',
+  'Inventory Manager':'ইনভেন্টরি ম্যানেজার',
+  'Transaction Manager':'ট্রানজ্যাকশন ম্যানেজার',
+  'Stock Requester':'স্টক রিকোয়েস্টার',
+  'Chef':'শেফ',
+  'Request':'রিকোয়েস্ট',
+  'Stock':'স্টক',
+  'Dispatch':'ডিসপ্যাচ',
+  'Receive Stock':'স্টক গ্রহণ',
+  'Requests':'রিকোয়েস্ট',
+  'History':'হিস্ট্রি',
+  'Statistics':'পরিসংখ্যান',
+  'Admin Center':'অ্যাডমিন সেন্টার',
+  'Administration':'অ্যাডমিনিস্ট্রেশন',
+  'Team Management':'টিম ম্যানেজমেন্ট',
+  'Inventory Setup':'ইনভেন্টরি সেটআপ',
+  'Departments':'ডিপার্টমেন্ট',
+  'Company Controls':'কোম্পানি কন্ট্রোল',
+  'Company information and access code':'কোম্পানির তথ্য ও অ্যাক্সেস কোড',
+  'Security PIN':'সিকিউরিটি PIN',
+  'Fingerprint unlock':'ফিঙ্গারপ্রিন্ট আনলক',
+  'Sign out':'সাইন আউট',
+  'Language':'ভাষা',
+  'English':'ইংরেজি',
+  'Bengali':'বাংলা',
+  'Back':'পিছনে',
+  'Back to workspace':'ওয়ার্কস্পেসে ফিরে যান',
+  'Create Company':'কোম্পানি তৈরি করুন',
+  'Join Company':'কোম্পানিতে যোগ দিন',
+  'Company name':'কোম্পানির নাম',
+  'Company code':'কোম্পানি কোড',
+  'Continue':'চালিয়ে যান',
+  'Save':'সেভ',
+  'Cancel':'বাতিল',
+  'Close':'বন্ধ করুন',
+  'Add':'যোগ করুন',
+  'Delete':'ডিলিট',
+  'Edit':'এডিট',
+  'Update':'আপডেট',
+  'Refresh':'রিফ্রেশ',
+  'Search':'সার্চ',
+  'Filter':'ফিল্টার',
+  'Date':'তারিখ',
+  'Today':'আজ',
+  'Select date':'তারিখ নির্বাচন করুন',
+  'All departments':'সব ডিপার্টমেন্ট',
+  'Department':'ডিপার্টমেন্ট',
+  'Item':'আইটেম',
+  'Item name':'আইটেমের নাম',
+  'Unit':'ইউনিট',
+  'Quantity':'পরিমাণ',
+  'Opening stock':'ওপেনিং স্টক',
+  'Current stock':'বর্তমান স্টক',
+  'Low stock alert':'লো স্টক অ্যালার্ট',
+  'Save item':'আইটেম সেভ করুন',
+  'Add an item':'আইটেম যোগ করুন',
+  'Automatic item photo':'অটোমেটিক আইটেম ছবি',
+  'Stock and usage insights':'স্টক ও ব্যবহারের তথ্য',
+  'Review previous stock activity':'আগের স্টক কার্যকলাপ দেখুন',
+  'View live current kitchen stock':'বর্তমান কিচেন স্টক দেখুন',
+  'Send stock out directly':'সরাসরি স্টক ডিসপ্যাচ করুন',
+  'Record newly arrived items':'নতুন আসা আইটেম রেকর্ড করুন',
+  'Create and manage kitchen stock requests':'কিচেন স্টক রিকোয়েস্ট তৈরি ও পরিচালনা করুন',
+  'See stock and usage insights':'স্টক ও ব্যবহারের তথ্য দেখুন',
+  'Prepare, save, generate and share today’s supplier order':'আজকের সাপ্লায়ার অর্ডার তৈরি, সেভ ও শেয়ার করুন',
+  'Track Inventory Manager receive & dispatch activity':'ইনভেন্টরি ম্যানেজারের গ্রহণ ও ডিসপ্যাচ কার্যকলাপ দেখুন',
+  'Dashboard':'ড্যাশবোর্ড',
+  'Supplier':'সাপ্লায়ার',
+  'Supplier order list':'সাপ্লায়ার অর্ডার লিস্ট',
+  'Make Order List':'অর্ডার লিস্ট তৈরি করুন',
+  'Live Daily Report':'লাইভ ডেইলি রিপোর্ট',
+  'Transaction Manager':'ট্রানজ্যাকশন ম্যানেজার',
+  'Company':'কোম্পানি',
+  'Employees':'কর্মী',
+  'Team':'টিম',
+  'Role':'রোল',
+  'Access':'অ্যাক্সেস',
+  'Working days':'কাজের দিন',
+  'Add employee':'কর্মী যোগ করুন',
+  'Employee email':'কর্মীর ইমেইল',
+  'Choose role':'রোল নির্বাচন করুন',
+  'Select at least one access day.':'কমপক্ষে একটি অ্যাক্সেসের দিন নির্বাচন করুন।',
+  'Enable':'চালু করুন',
+  'Disable':'বন্ধ করুন',
+  'Enabled':'চালু',
+  'Disabled':'বন্ধ',
+  'No employees yet':'এখনও কোনো কর্মী নেই',
+  'No records found':'কোনো রেকর্ড পাওয়া যায়নি',
+  'No items found':'কোনো আইটেম পাওয়া যায়নি',
+  'No requests found':'কোনো রিকোয়েস্ট পাওয়া যায়নি',
+  'Pending':'অপেক্ষমাণ',
+  'Approved':'অনুমোদিত',
+  'Rejected':'বাতিল',
+  'Fulfilled':'সম্পন্ন',
+  'Received':'গৃহীত',
+  'Dispatched':'ডিসপ্যাচ করা হয়েছে',
+  'Save changes':'পরিবর্তন সেভ করুন',
+  'Confirm':'নিশ্চিত করুন',
+  'Approve':'অনুমোদন',
+  'Reject':'বাতিল',
+  'Fulfill':'সম্পন্ন করুন',
+  'History account':'হিস্ট্রি অ্যাকাউন্ট',
+  'Transaction history':'ট্রানজ্যাকশন হিস্ট্রি',
+  'Live report':'লাইভ রিপোর্ট',
+  'Daily report':'দৈনিক রিপোর্ট',
+  'Statistics':'পরিসংখ্যান',
+  'Total':'মোট',
+  'Received today':'আজ গ্রহণ',
+  'Dispatched today':'আজ ডিসপ্যাচ',
+  'Low stock':'লো স্টক',
+  'Near low stock':'লো স্টকের কাছাকাছি',
+  'Sufficient stock':'পর্যাপ্ত স্টক',
+  'No data available':'কোনো ডেটা নেই',
+  'Last 2 days':'শেষ ২ দিন',
+  'Last 7 days':'শেষ ৭ দিন',
+  'Select an item':'একটি আইটেম নির্বাচন করুন',
+  'Save transaction':'ট্রানজ্যাকশন সেভ করুন',
+  'Dispatch stock':'স্টক ডিসপ্যাচ',
+  'Receive stock':'স্টক গ্রহণ',
+  'Request stock':'স্টক রিকোয়েস্ট',
+  'Stock request':'স্টক রিকোয়েস্ট',
+  'Request quantity':'রিকোয়েস্টের পরিমাণ',
+  'Notes':'নোট',
+  'Reason':'কারণ',
+  'Status':'স্ট্যাটাস',
+  'Time':'সময়',
+  'Created':'তৈরি হয়েছে',
+  'Updated':'আপডেট হয়েছে',
+  'Name':'নাম',
+  'Email':'ইমেইল',
+  'Welcome back':'আবার স্বাগতম',
+  'Please wait':'অনুগ্রহ করে অপেক্ষা করুন',
+  'Loading…':'লোড হচ্ছে…',
+  'Loading...':'লোড হচ্ছে...',
+  'Done':'সম্পন্ন',
+  'Success':'সফল',
+  'Error':'ত্রুটি',
+  'No':'না',
+  'Yes':'হ্যাঁ',
+  'All':'সব',
+  'None':'কোনোটিই নয়',
+  'Monday':'সোমবার',
+  'Tuesday':'মঙ্গলবার',
+  'Wednesday':'বুধবার',
+  'Thursday':'বৃহস্পতিবার',
+  'Friday':'শুক্রবার',
+  'Saturday':'শনিবার',
+  'Sunday':'রবিবার',
+  'kg':'কেজি',
+  'gram':'গ্রাম',
+  'ton':'টন',
+  'liter':'লিটার',
+  'ml':'মিলি',
+  'packet':'প্যাকেট',
+  'sack':'বস্তা',
+  'piece':'পিস',
+  'bottle':'বোতল',
+  'box':'বক্স',
+  'dozen':'ডজন',
+  'tray':'ট্রে',
+  'carton':'কার্টন',
+  'bag':'ব্যাগ',
+  'can':'ক্যান',
+  'jar':'জার',
+  'tin':'টিন',
+  'bundle':'বান্ডেল',
+  'set':'সেট',
+  'Settings':'সেটিংস',
+  'Account':'অ্যাকাউন্ট',
+  'Profile':'প্রোফাইল',
+  'Security':'সিকিউরিটি',
+  'Company code':'কোম্পানি কোড',
+  'Inventory':'ইনভেন্টরি',
+  'Operations':'অপারেশনস',
+  'Actions':'অ্যাকশন',
+  'Details':'বিস্তারিত',
+  'View':'দেখুন',
+  'Share':'শেয়ার',
+  'Download':'ডাউনলোড',
+  'Export':'এক্সপোর্ট',
+  'Print':'প্রিন্ট',
+  'Generate':'তৈরি করুন',
+  'Clear':'ক্লিয়ার',
+  'Apply':'প্রয়োগ করুন',
+  'Reset':'রিসেট',
+  'Previous':'আগের',
+  'Next':'পরের',
+  'Back to admin':'অ্যাডমিনে ফিরে যান',
+  'Workspace':'ওয়ার্কস্পেস',
+  'Loading your workspace':'আপনার ওয়ার্কস্পেস লোড হচ্ছে',
+  'Please wait while your inventory and company data are being prepared.':'আপনার ইনভেন্টরি ও কোম্পানির ডেটা প্রস্তুত করা হচ্ছে। অনুগ্রহ করে অপেক্ষা করুন।',
+  'Create your security PIN':'আপনার সিকিউরিটি PIN তৈরি করুন',
+  'Workspace locked':'ওয়ার্কস্পেস লক করা হয়েছে',
+  'Incorrect Inventro PIN.':'ভুল Inventro PIN।',
+  'PINs do not match.':'PIN দুটির মিল নেই।',
+  'PIN must contain 4 to 8 digits.':'PIN-এ ৪ থেকে ৮টি সংখ্যা থাকতে হবে।',
+  'Not signed in.':'সাইন ইন করা হয়নি।',
+  'No fingerprint credential on this device.':'এই ডিভাইসে কোনো ফিঙ্গারপ্রিন্ট ক্রেডেনশিয়াল নেই।',
+  'Your company session is not available.':'আপনার কোম্পানি সেশন উপলভ্য নয়।',
+  'Enter valid quantity values.':'সঠিক পরিমাণ লিখুন।',
+  'Enter a quantity greater than 0.':'০-এর বেশি পরিমাণ লিখুন।',
+  'Choose an item first.':'প্রথমে একটি আইটেম নির্বাচন করুন।',
+  'Enter a valid item name.':'সঠিক আইটেমের নাম লিখুন।',
+  'Choose a valid unit.':'সঠিক ইউনিট নির্বাচন করুন।',
+  'Opening stock must be 0 or more.':'ওপেনিং স্টক ০ বা তার বেশি হতে হবে।',
+  'Low stock alert must be 0 or more.':'লো স্টক অ্যালার্ট ০ বা তার বেশি হতে হবে।',
+  'This item name already exists. Names are not case-sensitive.':'এই আইটেমের নাম ইতিমধ্যেই আছে। বড় বা ছোট হাতের অক্ষর আলাদা হিসেবে ধরা হয় না।',
+  'This item already exists.':'এই আইটেমটি ইতিমধ্যেই আছে।',
+  'Item no longer exists.':'আইটেমটি আর নেই।',
+  'Another item already uses that name.':'অন্য একটি আইটেমে এই নামটি ব্যবহার করা হয়েছে।',
+  'Your employee access is not active. Please ask the Admin to enable it.':'আপনার কর্মী অ্যাক্সেস সক্রিয় নয়। অ্যাডমিনকে এটি চালু করতে বলুন।',
+  'Only Admin can add inventory items.':'শুধুমাত্র অ্যাডমিন ইনভেন্টরি আইটেম যোগ করতে পারেন।',
+  'Only Admin can edit inventory definitions.':'শুধুমাত্র অ্যাডমিন ইনভেন্টরি তথ্য পরিবর্তন করতে পারেন।',
+  'Only Admin can delete inventory items.':'শুধুমাত্র অ্যাডমিন ইনভেন্টরি আইটেম ডিলিট করতে পারেন।',
+  'Only Admin and Inventory Manager can dispatch stock directly.':'শুধুমাত্র অ্যাডমিন ও ইনভেন্টরি ম্যানেজার সরাসরি স্টক ডিসপ্যাচ করতে পারেন।',
+  'Only Admin and Inventory Manager can receive stock.':'শুধুমাত্র অ্যাডমিন ও ইনভেন্টরি ম্যানেজার স্টক গ্রহণ করতে পারেন।',
+  'Select the department receiving this stock.':'এই স্টক যে ডিপার্টমেন্ট গ্রহণ করছে সেটি নির্বাচন করুন।',
+  'Select a valid department.':'একটি সঠিক ডিপার্টমেন্ট নির্বাচন করুন।',
+  'Refresh the stock list.':'স্টক লিস্ট রিফ্রেশ করুন।',
+  'You do not have permission to create a stock request.':'আপনার স্টক রিকোয়েস্ট তৈরি করার অনুমতি নেই।',
+  'Select the department this request is for.':'এই রিকোয়েস্টের ডিপার্টমেন্ট নির্বাচন করুন।',
+  'Refresh and try again.':'রিফ্রেশ করে আবার চেষ্টা করুন।',
+  'Only the person who created the request can cancel it.':'শুধুমাত্র রিকোয়েস্ট তৈরি করা ব্যক্তি এটি বাতিল করতে পারেন।',
+  'You can cancel only your own request.':'আপনি শুধুমাত্র নিজের রিকোয়েস্ট বাতিল করতে পারেন।',
+  'Only pending requests can be cancelled. Approved, rejected, or fulfilled requests cannot be cancelled.':'শুধুমাত্র অপেক্ষমাণ রিকোয়েস্ট বাতিল করা যায়। অনুমোদিত, বাতিল বা সম্পন্ন রিকোয়েস্ট বাতিল করা যায় না।',
+  'Only Inventory Manager can manage requests.':'শুধুমাত্র ইনভেন্টরি ম্যানেজার রিকোয়েস্ট পরিচালনা করতে পারেন।',
+  'Invalid request status.':'রিকোয়েস্টের স্ট্যাটাস সঠিক নয়।',
+  'The requested item no longer exists.':'রিকোয়েস্ট করা আইটেমটি আর নেই।',
+  'The request has an invalid quantity.':'রিকোয়েস্টের পরিমাণ সঠিক নয়।',
+  'Only approved requests can be dispatched.':'শুধুমাত্র অনুমোদিত রিকোয়েস্ট ডিসপ্যাচ করা যায়।',
+  'This correction would make stock negative. Check the movement quantity/type.':'এই পরিবর্তনের ফলে স্টক ঋণাত্মক হবে। পরিমাণ ও মুভমেন্টের ধরন পরীক্ষা করুন।',
+  'Only the account that owns the transaction can delete it.':'শুধুমাত্র যে অ্যাকাউন্টের ট্রানজ্যাকশন সেটি ডিলিট করতে পারে।',
+  'Only the account that owns the transaction can edit it.':'শুধুমাত্র যে অ্যাকাউন্টের ট্রানজ্যাকশন সেটি এডিট করতে পারে।',
+  'This transaction is already deleted.':'এই ট্রানজ্যাকশন ইতিমধ্যেই ডিলিট করা হয়েছে।',
+  'Invalid movement type.':'মুভমেন্টের ধরন সঠিক নয়।',
+  'Quantity must be 0 or more.':'পরিমাণ ০ বা তার বেশি হতে হবে।',
+  'Company was not found.':'কোম্পানি পাওয়া যায়নি।',
+  'Company was already deleted.':'কোম্পানি ইতিমধ্যেই ডিলিট করা হয়েছে।',
+  'Only the original owner can delete this company.':'শুধুমাত্র মূল মালিক এই কোম্পানি ডিলিট করতে পারেন।',
+  'This browser does not support notifications.':'এই ব্রাউজার নোটিফিকেশন সমর্থন করে না।',
+  'Notification permission was not granted.':'নোটিফিকেশনের অনুমতি দেওয়া হয়নি।',
+  'File sharing is not supported by this browser.':'এই ব্রাউজারে ফাইল শেয়ার করা সমর্থিত নয়।',
+  'There are no stock items to share.':'শেয়ার করার মতো কোনো স্টক আইটেম নেই।',
+  'There are no new red items, selected yellow items, or selected outstanding orders to share.':'শেয়ার করার মতো নতুন লাল আইটেম, নির্বাচিত হলুদ আইটেম বা বাকি অর্ডার নেই।',
+  'PDF generator is unavailable.':'PDF জেনারেটর উপলভ্য নয়।',
+  'Add at least one item with a quantity greater than 0.':'০-এর বেশি পরিমাণসহ কমপক্ষে একটি আইটেম যোগ করুন।',
+  'This order list is locked because the day is already closed.':'দিনটি ইতিমধ্যে বন্ধ হওয়ায় এই অর্ডার লিস্ট লক করা হয়েছে।',
+  'Only the Transaction Manager can manage supplier order lists.':'শুধুমাত্র ট্রানজ্যাকশন ম্যানেজার সাপ্লায়ার অর্ডার লিস্ট পরিচালনা করতে পারেন।',
+  'Only the Transaction Manager or Admin can view supplier order lists.':'শুধুমাত্র ট্রানজ্যাকশন ম্যানেজার বা অ্যাডমিন সাপ্লায়ার অর্ডার লিস্ট দেখতে পারেন।',
+  'No supplier order for':'এই তারিখের জন্য কোনো সাপ্লায়ার অর্ডার নেই',
+  'No Transaction Manager list was saved for this date.':'এই তারিখের জন্য কোনো ট্রানজ্যাকশন ম্যানেজার লিস্ট সেভ করা হয়নি।',
+  'Manual selection':'ম্যানুয়াল নির্বাচন',
+  'Qty':'পরিমাণ',
+  'Checking PIN…':'PIN যাচাই করা হচ্ছে…',
+  'Finding image & saving…':'ছবি খুঁজে সেভ করা হচ্ছে…',
+  'Item added successfully.':'আইটেম সফলভাবে যোগ হয়েছে।',
+  'Transaction changes':'ট্রানজ্যাকশন পরিবর্তন',
+  'Audit trail':'অডিট ট্রেইল',
+  'No previous versions recorded':'আগের কোনো ভার্সন রেকর্ড নেই',
+  'Daily transaction statement':'দৈনিক ট্রানজ্যাকশন স্টেটমেন্ট',
+  'Closing balance becomes the next day\'s opening balance.':'ক্লোজিং ব্যালেন্স পরের দিনের ওপেনিং ব্যালেন্স হবে।',
+  'No matching history was recorded on':'এই তারিখে কোনো মিল থাকা হিস্ট্রি রেকর্ড করা হয়নি',
+  'No matching Inventory Manager transactions were recorded on':'এই তারিখে কোনো মিল থাকা ইনভেন্টরি ম্যানেজার ট্রানজ্যাকশন রেকর্ড করা হয়নি',
+  'Choose a valid department':'সঠিক ডিপার্টমেন্ট নির্বাচন করুন',
+  'Choose the language':'ভাষা নির্বাচন করুন',
+
+  'Quick access':'দ্রুত অ্যাক্সেস',
+  'Company workspace':'কোম্পানি ওয়ার্কস্পেস'
+};
+
+let currentLanguage = localStorage.getItem(LANGUAGE_KEY) === 'bn' ? 'bn' : 'en';
+
+function t(value) {
+  const s = String(value ?? '');
+  return currentLanguage === 'bn' ? (BN[s] || s) : s;
+}
+
+function translateDynamicText(s) {
+  if (currentLanguage !== 'bn') return s;
+  let out = String(s);
+  // Long phrases first so embedded labels are translated naturally.
+  const keys = Object.keys(BN).filter(k => k.length > 2).sort((a,b) => b.length-a.length);
+  for (const key of keys) {
+    if (out.includes(key)) out = out.split(key).join(BN[key]);
+  }
+  return out;
+}
+
+let applyingLanguage = false;
+function applyLanguage(rootNode = document) {
+  if (applyingLanguage) return;
+  applyingLanguage = true;
+  try {
+    const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(node => {
+      const parent = node.parentElement;
+      if (!parent || ['SCRIPT','STYLE','NOSCRIPT'].includes(parent.tagName)) return;
+      // Never translate user-entered data such as email, item names or values.
+      if (parent.closest('input,textarea,[data-no-translate]')) return;
+      const raw = node.nodeValue;
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      const translated = translateDynamicText(trimmed);
+      if (translated !== trimmed) {
+        node.nodeValue = raw.replace(trimmed, translated);
+      }
+    });
+    document.querySelectorAll('input[placeholder],textarea[placeholder],select[aria-label],[title],[aria-label]').forEach(el => {
+      if (el.closest('[data-no-translate]')) return;
+      ['placeholder','title','aria-label'].forEach(attr => {
+        if (el.hasAttribute(attr)) {
+          const v = el.getAttribute(attr);
+          const nv = translateDynamicText(v);
+          if (nv !== v) el.setAttribute(attr,nv);
+        }
+      });
+    });
+    document.documentElement.lang = currentLanguage === 'bn' ? 'bn-IN' : 'en-IN';
+    document.documentElement.dir = 'ltr';
+  } finally {
+    applyingLanguage = false;
+  }
+}
+
+function languageToggleHtml() {
+  return `<div class="language-control" data-no-translate>
+    <span class="language-label">Language</span>
+    <button class="language-toggle ${currentLanguage==='bn'?'is-bengali':''}" id="language-toggle" type="button" role="switch" aria-checked="${currentLanguage==='bn'}" aria-label="Language">
+      <span class="language-option en">EN</span><span class="language-track"><span class="language-thumb"></span></span><span class="language-option bn">বাংলা</span>
+    </button>
+  </div>`;
+}
+
+function attachLanguageToggle(scope = document) {
+  const btn = scope.querySelector?.('#language-toggle');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', () => {
+    // Re-render the current screen instead of translating the already-rendered
+    // DOM in place. The old approach permanently replaced English text with
+    // Bengali, so switching back to English could leave the UI translated or
+    // require a manual refresh. Every render starts from the original English
+    // template and applies the selected language exactly once.
+    currentLanguage = currentLanguage === 'bn' ? 'en' : 'bn';
+    localStorage.setItem(LANGUAGE_KEY, currentLanguage);
+    document.documentElement.lang = currentLanguage === 'bn' ? 'bn-IN' : 'en-IN';
+
+    // render() rebuilds the active account/screen immediately, so every
+    // visible label, button, placeholder and menu is updated together.
+    render();
+  });
+}
+
+function ensureGlobalAccountControl() {
+  if (!auth.currentUser) return;
+  const topbar = root.querySelector('.topbar');
+  if (!topbar) return;
+  // Home already owns a complete account dropdown; enrich it with language control.
+  let wrap = topbar.querySelector('.account-wrap');
+  if (wrap) {
+    const menu = wrap.querySelector('.account-menu');
+    if (menu && !menu.querySelector('.language-menu-row')) {
+      menu.insertAdjacentHTML('afterbegin', `<div class="language-menu-row">${languageToggleHtml()}</div><div class="account-menu-divider"></div>`);
+    }
+    attachLanguageToggle(menu || wrap);
+    return;
+  }
+  const oldPill = topbar.querySelector('.user-pill');
+  if (oldPill) oldPill.remove();
+  const user = auth.currentUser;
+  const email = escapeHtml(user.email || '');
+  const initial = escapeHtml((user.displayName?.[0] || user.email?.[0] || 'U').toUpperCase());
+  topbar.insertAdjacentHTML('beforeend', `<div class="account-wrap global-account-wrap">
+    <button class="user-pill account-toggle" id="global-account-toggle" type="button" aria-haspopup="menu" aria-expanded="false"><div class="avatar">${initial}</div><div class="account-identity"><strong>${escapeHtml(user.displayName || 'Account')}</strong><span>${email}</span></div><span class="account-chevron" aria-hidden="true">⌄</span></button>
+    <div class="account-menu" id="global-account-menu" hidden>
+      <div class="account-menu-email">${email}</div>
+      <div class="language-menu-row">${languageToggleHtml()}</div>
+      <div class="account-menu-divider"></div>
+      <button type="button" class="menu-action" id="global-pin-settings">🔐 Security PIN</button>
+      ${isMobileDevice()?`<button type="button" class="menu-action" id="global-biometric-settings">👆 Fingerprint unlock ${biometricReadyOnThisDevice()?'(on)':'(off)'}</button>`:''}
+      <button type="button" class="menu-signout" id="global-menu-signout">Sign out</button>
+    </div>
+  </div>`);
+  const toggle = topbar.querySelector('#global-account-toggle');
+  const menu = topbar.querySelector('#global-account-menu');
+  toggle?.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    document.querySelectorAll('.account-menu').forEach(m=>{if(m!==menu)m.hidden=true;});
+    menu.hidden = !open;
+    toggle.setAttribute('aria-expanded',String(open));
+    toggle.classList.toggle('is-open',open);
+  });
+  menu?.addEventListener('click', e => e.stopPropagation());
+  topbar.querySelector('#global-menu-signout')?.addEventListener('click', () => { clearEmployeeCodeVerification(); signOut(); });
+  topbar.querySelector('#global-pin-settings')?.addEventListener('click', renderPinSettings);
+  topbar.querySelector('#global-biometric-settings')?.addEventListener('click', async () => { await renderBiometricSettings(); render(); });
+  attachLanguageToggle(menu);
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.account-menu').forEach(m => { m.hidden = true; });
+});
+
+let languageObserver;
+function startLanguageSystem() {
+  if (languageObserver) languageObserver.disconnect();
+  languageObserver = new MutationObserver(() => {
+    if (applyingLanguage) return;
+    applyLanguage(document);
+    ensureGlobalAccountControl();
+    attachLanguageToggle(document);
+  });
+  languageObserver.observe(root, {childList:true, subtree:true});
+  applyLanguage(document);
+  ensureGlobalAccountControl();
+  attachLanguageToggle(document);
+}
+
 const root = document.getElementById('app');
 
 async function enableLowStockNotifications(){
@@ -2337,26 +2771,49 @@ function renderHome(membership) {
     ...(role === 'inventory_manager' ? [['⬆️','Dispatch','Send stock out directly','dispatch'],['⬇️','Receive Stock','Record newly arrived items','receive']] : []),
     ...(canRequest ? [['📝','Requests','Create and manage kitchen stock requests','requests']] : []),
     ...(isAdmin ? [['👥','Admin','Manage your company team','admin']] : []),
-    ['📊','Stats','See stock and usage insights','stats'],
+    ['📊','Statistics','See stock and usage insights','stats'],
     // Transaction Manager's "History" and "Live Daily Report" open the exact
     // same screen, so only the more clearly named one is kept for them.
     ...(role === 'transaction_manager' ? [['🛒','Make Order List','Prepare, save, generate and share today’s supplier order','tm-order-list'],['⚡','Live Daily Report','Track Inventory Manager receive & dispatch activity','tm-live-report']] : [['🕘','History','Review previous stock activity','history']])
   ];
 
+  const displayName = escapeHtml(user?.displayName || firstNameRaw || 'Account');
   root.innerHTML = `
     <div class="dashboard">
       <div class="topbar">
         <div class="topbar-brand">Inventro</div>
         <div class="account-wrap">
-          <button class="user-pill account-toggle" id="account-toggle" type="button"><div class="avatar">${initial}</div><div class="user-email">${email}</div><span class="account-chevron">⌄</span></button>
-          <div class="account-menu" id="account-menu" hidden><div class="account-menu-email">${email}</div><button type="button" class="menu-action" id="pin-settings-btn">🔐 Security PIN</button>${isMobileDevice()?`<button type="button" class="menu-action" id="biometric-settings-btn">👆 Fingerprint unlock ${biometricReadyOnThisDevice()?'(on)':'(off)'}</button>`:''}<button type="button" class="menu-signout" id="menu-signout">Sign out</button></div>
+          <button class="user-pill account-toggle" id="account-toggle" type="button" aria-haspopup="menu" aria-expanded="false">
+            <div class="avatar">${initial}</div>
+            <div class="account-identity"><strong>${displayName}</strong><span>${email}</span></div>
+            <span class="account-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div class="account-menu" id="account-menu" hidden role="menu">
+            <div class="account-menu-header"><div class="account-menu-avatar">${initial}</div><div class="account-menu-user"><strong>${displayName}</strong><span>${email}</span></div></div>
+            <div class="account-menu-divider"></div>
+            <div class="language-menu-row">${languageToggleHtml()}</div>
+            <div class="account-menu-divider"></div>
+            <button type="button" class="menu-action" id="pin-settings-btn">🔐 Security PIN</button>
+            ${isMobileDevice()?`<button type="button" class="menu-action" id="biometric-settings-btn">👆 Fingerprint unlock ${biometricReadyOnThisDevice()?'(on)':'(off)'}</button>`:''}
+            <button type="button" class="menu-signout" id="menu-signout">↪ Sign out</button>
+          </div>
         </div>
       </div>
       <section class="hero"><p class="eyebrow">Company workspace</p><h1>Welcome, ${firstName}! 👋</h1><p>You are successfully logged in. This is your ${companyName} inventory workspace.</p><div class="company-meta"><span class="badge">🏢 ${companyName}</span><span class="badge role">${isAdmin ? '👑 Admin' : '👤 ' + escapeHtml(roleLabel(role))}</span><span class="badge">● Active</span></div></section>
       <div class="section-title">Quick access</div><div class="quick-grid">${quickItems.map(([icon,title,desc,action])=>`<button class="quick-card ${action==='requests'?'request-quick-card':''} ${action==='stock'?'stock-quick-card':''}" data-action="${action}" type="button"><div class="quick-icon">${icon}</div><strong>${title}${action==='stock'?'<span class="home-status-badge" id="stock-alert-badge" hidden>0</span>':''}${action==='requests'?'<span class="request-badge" id="request-badge" hidden>0</span>':''}</strong><span>${desc}</span></button>`).join('')}</div>
     </div>`;
   const accountToggle=root.querySelector('#account-toggle'), accountMenu=root.querySelector('#account-menu');
-  if(accountToggle&&accountMenu) accountToggle.addEventListener('click',()=>{accountMenu.hidden=!accountMenu.hidden;});
+  if(accountToggle&&accountMenu) {
+    accountToggle.addEventListener('click',(event)=>{
+      event.stopPropagation();
+      const open = accountMenu.hidden;
+      document.querySelectorAll('.account-menu').forEach(m=>{if(m!==accountMenu)m.hidden=true;});
+      accountMenu.hidden=!open;
+      accountToggle.setAttribute('aria-expanded',String(open));
+      accountToggle.classList.toggle('is-open',open);
+    });
+    accountMenu.addEventListener('click',event=>event.stopPropagation());
+  }
   root.querySelector('#menu-signout')?.addEventListener('click',()=>{clearEmployeeCodeVerification();signOut();});
   root.querySelector('#enable-alerts')?.addEventListener('click',async()=>{try{await enableLowStockNotifications();}catch(err){showTemporaryMessage(friendlyError(err),'error');}});
   startHomeStatusListener();
@@ -3593,7 +4050,7 @@ async function renderStats(){
   const dispatchedSummary=quantitySummary(dispatched);
   const roleTitle=role==='admin'?'Company-wide':roleLabel(role);
   const roleDesc={admin:'Company-wide inventory and transaction insights.',inventory_manager:'Your receiving, dispatch and request-workflow insights.',transaction_manager:'Inventory Manager transactions plus your own request activity.',stock_requester:'Your stock requests and fulfilled-dispatch activity.',chef:'Your stock requests and fulfilled-dispatch activity.',request:'Your stock requests and fulfilled-dispatch activity.'}[role]||'Your inventory activity and insights.';
-  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Stats</h1></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
+  root.innerHTML=`<div class="dashboard feature-page stats-page"><div class="topbar"><button class="back-btn" id="stats-back">‹ Back</button><div class="topbar-brand">Inventro</div><button class="refresh-btn" id="stats-refresh">↻ Refresh</button></div><section class="feature-header"><p class="eyebrow">Inventory insights · ${escapeHtml(roleTitle)}</p><h1>Statistics</h1></section>${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}
   <div class="stat-grid stats-summary">
     <div class="stat-card"><strong>${items.length}</strong><span>Total items</span></div>
     <div class="stat-card"><strong>${received.length}</strong><span>Receive transactions</span></div>
@@ -3974,6 +4431,7 @@ let adminTmLiveRefreshTimer = null;
 let view = 'loading', membership = null, justCreatedCode = null, returnToJoinAfterSignOut = false;
 
 function render() {
+  startLanguageSystem();
   if (auth.currentUser && membership && isMobileDevice() && !['welcome','loading','employeeCode'].includes(view) && !pinUnlocked()) { showPinGate(); return; }
   if (view !== 'stock') stopStockListener();
   if (view !== 'requests') stopRequestListListener();
