@@ -82,6 +82,7 @@ function isStockRequesterRole(role) { return ['stock_requester','chef','request'
 function normalizedRole(role) {
   const raw=String(role||'').trim().toLowerCase().replace(/\s+/g,'_');
   if (['chef','request','stock_requisitioner','stock_requester'].includes(raw)) return 'stock_requester';
+  if (raw==='cashier' || raw==='cash') return 'cashier';
   if (['inventorymanager','inventory_manager'].includes(raw)) return 'inventory_manager';
   if (['transactionmanager','transaction_manager'].includes(raw)) return 'transaction_manager';
   if (raw==='admin') return 'admin';
@@ -300,7 +301,7 @@ async function addEmployee(email, role, workingDays) {
   if (cleanEmail === admin.email.toLowerCase()) {
     throw new Error('The owner account is already the admin. Add a different employee email.');
   }
-  if (!['inventory_manager', 'transaction_manager', 'stock_requester', 'chef', 'request'].includes(role)) {
+  if (!['inventory_manager', 'transaction_manager', 'cashier', 'stock_requester', 'chef', 'request'].includes(role)) {
     throw new Error('Choose a valid employee role.');
   }
   if (!Array.isArray(workingDays) || workingDays.length === 0) {
@@ -529,7 +530,7 @@ function pinModal(action, setup=false){
     const old=document.getElementById('inventro-pin-modal'); if(old) old.remove();
     const stored=storedPinHash();
     const title=setup?'Create your Inventro PIN':`Enter PIN to ${action}`;
-    const subtitle=setup?'Create a 4–8 digit personal PIN. It is separate from the company code.':'This PIN is required before this stock transaction can be saved.';
+    const subtitle=setup?'Create a 4–8 digit personal PIN. It is separate from the company code.':`Security verification is required before you can ${action}.`;
     const modal=document.createElement('div'); modal.id='inventro-pin-modal'; modal.className='pin-modal-backdrop';
     modal.innerHTML=`<div class="pin-modal" role="dialog" aria-modal="true" aria-labelledby="pin-modal-title"><div class="pin-modal-icon">🔐</div><h2 id="pin-modal-title">${escapeHtml(title)}</h2><p>${escapeHtml(subtitle)}</p><div class="pin-modal-field"><label for="pin-modal-input">${setup?'New PIN':'Personal PIN'}</label><div class="pin-modal-input-wrap"><input id="pin-modal-input" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="4–8 digits"><button type="button" id="pin-modal-toggle" aria-label="Show PIN">👁</button></div></div>${setup?'<div class="pin-modal-field"><label for="pin-modal-confirm">Confirm PIN</label><div class="pin-modal-input-wrap"><input id="pin-modal-confirm" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Re-enter PIN"><button type="button" data-confirm-toggle aria-label="Show PIN">👁</button></div></div>':''}<div class="pin-modal-actions"><button type="button" class="small-action" id="pin-modal-cancel">Cancel</button><button type="button" class="btn btn-primary" id="pin-modal-submit">${setup?'Create PIN':'Verify PIN'}</button></div><div class="pin-modal-error" id="pin-modal-error" hidden></div></div>`;
     document.body.appendChild(modal);
@@ -1473,6 +1474,7 @@ function roleLabel(role) {
   return ({
     inventory_manager: 'Inventory Manager',
     transaction_manager: 'Transaction Manager',
+    cashier: 'Cashier',
     admin: 'Admin'
   })[role] || role;
 }
@@ -1485,7 +1487,7 @@ function shortPersonId(email, role='') {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = ''; let n = hash >>> 0;
   for (let i = 0; i < 4; i++) { code += alphabet[n % alphabet.length]; n = Math.floor(n / alphabet.length); }
-  const prefix = ({inventory_manager:'IM', transaction_manager:'TM', stock_requester:'SR', chef:'SR', request:'SR', admin:'AD'})[String(role||'').toLowerCase()] || 'ID';
+  const prefix = ({inventory_manager:'IM', transaction_manager:'TM', cashier:'CA', stock_requester:'SR', chef:'SR', request:'SR', admin:'AD'})[String(role||'').toLowerCase()] || 'ID';
   return `${prefix}-${code}`;
 }
 
@@ -1506,7 +1508,7 @@ function personRef(email, role='', explicitName='') {
   const cleanEmail = String(email || '').trim().toLowerCase();
   const localPart = (cleanEmail.includes('@') ? cleanEmail.split('@')[0] : cleanEmail)
     .replace(/[^a-z0-9._-]/gi, '') || 'user';
-  const prefix = ({inventory_manager:'IM', transaction_manager:'TM', stock_requester:'SR', chef:'SR', request:'SR', admin:'AD'})[String(role||'').toLowerCase()] || 'ID';
+  const prefix = ({inventory_manager:'IM', transaction_manager:'TM', cashier:'CA', stock_requester:'SR', chef:'SR', request:'SR', admin:'AD'})[String(role||'').toLowerCase()] || 'ID';
   return `${prefix}-${localPart}`;
 }
 
@@ -1559,6 +1561,56 @@ const BN = {
   'Requests':'রিকোয়েস্ট',
   'History':'হিস্ট্রি',
   'Statistics':'পরিসংখ্যান',
+  'Cash':'ক্যাশ',
+  'Cash Monitor':'ক্যাশ মনিটর',
+  'Cashier':'ক্যাশিয়ার',
+  'Secure cash ledger':'সুরক্ষিত ক্যাশ লেজার',
+  'Record cash received and outflow by cash department. Today is open; completed days are locked.':'ক্যাশ ডিপার্টমেন্ট অনুযায়ী ক্যাশ গ্রহণ ও খরচ রেকর্ড করুন। আজকের দিন খোলা; সম্পন্ন দিন লক থাকে।',
+  'Record cash transaction':'ক্যাশ ট্রানজ্যাকশন রেকর্ড করুন',
+  'Every save requires ':'প্রতিটি সেভের জন্য ',
+  'fingerprint/face or PIN':'ফিঙ্গারপ্রিন্ট/ফেস বা PIN',
+  'your personal PIN':'আপনার ব্যক্তিগত PIN',
+  'Transaction type':'ট্রানজ্যাকশনের ধরন',
+  'Cash received':'ক্যাশ গ্রহণ',
+  'Cash outflow':'ক্যাশ খরচ',
+  'Amount (₹)':'পরিমাণ (₹)',
+  'Cash department':'ক্যাশ ডিপার্টমেন্ট',
+  'Select cash department…':'ক্যাশ ডিপার্টমেন্ট নির্বাচন করুন…',
+  'Note (optional)':'নোট (ঐচ্ছিক)',
+  'Today is open.':'আজকের দিন খোলা।',
+  'New cash entries can be recorded.':'নতুন ক্যাশ এন্ট্রি রেকর্ড করা যাবে।',
+  'This day is closed.':'এই দিনটি লক।',
+  'New entries are disabled. Inventory Manager can edit a past record only after the danger warning and verification.':'নতুন এন্ট্রি বন্ধ। ডেঞ্জার ওয়ার্নিং এবং ভেরিফিকেশনের পর শুধু ইনভেন্টরি ম্যানেজার পুরনো রেকর্ড এডিট করতে পারবেন।',
+  'Transactions':'ট্রানজ্যাকশন',
+  'Closing balance':'ক্লোজিং ব্যালেন্স',
+  'Opening balance':'ওপেনিং ব্যালেন্স',
+  'Received':'গ্রহণ',
+  'Spent':'খরচ',
+  'View Changes':'পরিবর্তন দেখুন',
+  'Edit':'এডিট',
+  'Cash activity':'ক্যাশ কার্যকলাপ',
+  'Cash transaction monitor':'ক্যাশ ট্রানজ্যাকশন মনিটর',
+  'Inventory Manager and Cashier entries · live today, on-call for older dates':'ইনভেন্টরি ম্যানেজার ও ক্যাশিয়ার এন্ট্রি · আজ লাইভ, পুরনো তারিখে অন-কল',
+  'Open full cash monitor':'সম্পূর্ণ ক্যাশ মনিটর খুলুন',
+  'Department type':'ডিপার্টমেন্টের ধরন',
+  'Cash departments and inventory departments are separate and never appear in each other’s selectors.':'ক্যাশ ও ইনভেন্টরি ডিপার্টমেন্ট আলাদা এবং একে অপরের সিলেক্টরে দেখা যাবে না।',
+  'Inventory departments':'ইনভেন্টরি ডিপার্টমেন্ট',
+  'Cash departments':'ক্যাশ ডিপার্টমেন্ট',
+  'Add inventory department':'ইনভেন্টরি ডিপার্টমেন্ট যোগ করুন',
+  'Add cash department':'ক্যাশ ডিপার্টমেন্ট যোগ করুন',
+  'Cash-only department':'শুধু ক্যাশ ডিপার্টমেন্ট',
+  'Inventory-only department':'শুধু ইনভেন্টরি ডিপার্টমেন্ট',
+  'No cash departments yet':'এখনও কোনো ক্যাশ ডিপার্টমেন্ট নেই',
+  'No inventory departments yet':'এখনও কোনো ইনভেন্টরি ডিপার্টমেন্ট নেই',
+  'DANGEROUS ACTION':'বিপজ্জনক কাজ',
+  'Edit a locked past-day cash record?':'লক থাকা পুরনো দিনের ক্যাশ রেকর্ড এডিট করবেন?',
+  'This day is already closed. Editing it will change that day’s closing balance and automatically recalculate the opening/closing balance of every following day.':'এই দিনটি ইতিমধ্যে বন্ধ। এটি এডিট করলে ওই দিনের ক্লোজিং ব্যালেন্স এবং পরের সব দিনের ওপেনিং/ক্লোজিং ব্যালেন্স পুনরায় হিসাব হবে।',
+  'I understand — continue':'আমি বুঝেছি — চালিয়ে যান',
+  'Audit trail':'অডিট ট্রেইল',
+  'No changes recorded':'কোনো পরিবর্তন রেকর্ড নেই',
+  'This transaction is still at its original version.':'এই ট্রানজ্যাকশন এখনও মূল ভার্সনে আছে।',
+  'Today':'আজ',
+
   'Admin Center':'অ্যাডমিন সেন্টার',
   'Administration':'অ্যাডমিনিস্ট্রেশন',
   'Team Management':'টিম ম্যানেজমেন্ট',
@@ -2028,6 +2080,100 @@ Object.assign(BN, {
   'Number(i.quantity||0)':'Number(i.quantity||0)',
 });
 
+// Cash Ledger translation coverage. These strings are rendered by the cash/admin
+// screens after the main language table, so keep them here to ensure every
+// cash-specific label, status, warning, and action follows the selected language.
+Object.assign(BN, {
+  'Date':'তারিখ',
+  'Transaction type':'ট্রানজ্যাকশনের ধরন',
+  'Cash received':'ক্যাশ গ্রহণ',
+  'Cash outflow':'ক্যাশ খরচ',
+  'Amount (₹)':'পরিমাণ (₹)',
+  'Cash department':'ক্যাশ ডিপার্টমেন্ট',
+  'Select cash department…':'ক্যাশ ডিপার্টমেন্ট নির্বাচন করুন…',
+  'Note (optional)':'নোট (ঐচ্ছিক)',
+  'e.g. Cash received from counter':'যেমন: কাউন্টার থেকে ক্যাশ গ্রহণ',
+  'Record transaction':'ট্রানজ্যাকশন রেকর্ড করুন',
+  'Checking security…':'সিকিউরিটি যাচাই করা হচ্ছে…',
+  'Cash transaction recorded.':'ক্যাশ ট্রানজ্যাকশন রেকর্ড হয়েছে।',
+  'Cash transaction updated and balances recalculated.':'ক্যাশ ট্রানজ্যাকশন আপডেট হয়েছে এবং ব্যালেন্স পুনরায় হিসাব করা হয়েছে।',
+  'Saving…':'সেভ করা হচ্ছে…',
+  'Save changes':'পরিবর্তন সেভ করুন',
+  'Today is open.':'আজকের দিন খোলা।',
+  'New cash entries can be recorded.':'নতুন ক্যাশ এন্ট্রি রেকর্ড করা যাবে।',
+  'This day is closed.':'এই দিনটি বন্ধ।',
+  'New entries are disabled. Inventory Manager can edit a past record only after the danger warning and verification.':'নতুন এন্ট্রি বন্ধ। ডেঞ্জার ওয়ার্নিং ও ভেরিফিকেশনের পর শুধু ইনভেন্টরি ম্যানেজার পুরনো রেকর্ড এডিট করতে পারবেন।',
+  'Today':'আজ',
+  'Selected date':'নির্বাচিত তারিখ',
+  'Closing balance':'ক্লোজিং ব্যালেন্স',
+  'Opening balance':'ওপেনিং ব্যালেন্স',
+  'Received':'গৃহীত',
+  'Spent':'খরচ',
+  'Transactions':'ট্রানজ্যাকশন',
+  'Locked past day':'লক থাকা পুরনো দিন',
+  'No cash transactions for':'এই তারিখে কোনো ক্যাশ ট্রানজ্যাকশন নেই:',
+  'Record the first transaction above.':'উপরে প্রথম ট্রানজ্যাকশনটি রেকর্ড করুন।',
+  'This day has no recorded cash activity.':'এই দিনে কোনো ক্যাশ কার্যকলাপ রেকর্ড করা হয়নি।',
+  'LIVE':'লাইভ',
+  'LOCKED':'লক',
+  'ON CALL':'অন-কল',
+  'Spent':'খরচ',
+  'Received':'গৃহীত',
+  'No note':'কোনো নোট নেই',
+  'View Changes':'পরিবর্তন দেখুন',
+  'Edit':'এডিট',
+  'Close':'বন্ধ করুন',
+  'Cash transaction':'ক্যাশ ট্রানজ্যাকশন',
+  'Cash transaction changes':'ক্যাশ ট্রানজ্যাকশনের পরিবর্তন',
+  'Original transaction':'মূল ট্রানজ্যাকশন',
+  'Current saved data':'বর্তমানে সেভ করা ডেটা',
+  'Change history':'পরিবর্তনের ইতিহাস',
+  'No changes recorded':'কোনো পরিবর্তন রেকর্ড নেই',
+  'This transaction is still at its original version.':'এই ট্রানজ্যাকশন এখনও মূল ভার্সনে আছে।',
+  'Changed by':'পরিবর্তন করেছেন',
+  'Previous amount':'আগের পরিমাণ',
+  'Previous type':'আগের ধরন',
+  'Previous department':'আগের ডিপার্টমেন্ট',
+  'Previous note':'আগের নোট',
+  'New amount':'নতুন পরিমাণ',
+  'New type':'নতুন ধরন',
+  'New department':'নতুন ডিপার্টমেন্ট',
+  'New note':'নতুন নোট',
+  'Created':'তৈরি হয়েছে',
+  'Updated':'আপডেট হয়েছে',
+  'DANGEROUS ACTION':'বিপজ্জনক কাজ',
+  'Edit a locked past-day cash record?':'লক থাকা পুরনো দিনের ক্যাশ রেকর্ড এডিট করবেন?',
+  'This day is already closed. Editing it will change that day’s closing balance and automatically recalculate the opening/closing balance of every following day.':'এই দিনটি ইতিমধ্যে বন্ধ। এটি এডিট করলে ওই দিনের ক্লোজিং ব্যালেন্স পরিবর্তন হবে এবং পরের প্রতিটি দিনের ওপেনিং/ক্লোজিং ব্যালেন্স স্বয়ংক্রিয়ভাবে পুনরায় হিসাব হবে।',
+  'I understand — continue':'আমি বুঝেছি — চালিয়ে যান',
+  'Verifying…':'যাচাই করা হচ্ছে…',
+  'Checking security…':'সিকিউরিটি যাচাই করা হচ্ছে…',
+  'Cash department added.':'ক্যাশ ডিপার্টমেন্ট যোগ হয়েছে।',
+  'Cash department deleted.':'ক্যাশ ডিপার্টমেন্ট ডিলিট হয়েছে।',
+  'Delete this cash department? Existing cash history will remain.':'এই ক্যাশ ডিপার্টমেন্ট ডিলিট করবেন? আগের ক্যাশ হিস্ট্রি থাকবে।',
+  'Only the company Admin can manage cash departments.':'শুধুমাত্র কোম্পানির অ্যাডমিন ক্যাশ ডিপার্টমেন্ট পরিচালনা করতে পারবেন।',
+  'Enter a valid cash department name.':'একটি সঠিক ক্যাশ ডিপার্টমেন্টের নাম লিখুন।',
+  'That cash department already exists.':'এই ক্যাশ ডিপার্টমেন্ট আগে থেকেই আছে।',
+  'Only Cashier or Inventory Manager can record cash transactions.':'শুধুমাত্র ক্যাশিয়ার বা ইনভেন্টরি ম্যানেজার ক্যাশ ট্রানজ্যাকশন রেকর্ড করতে পারবেন।',
+  'Cash entries can only be recorded for today. Select today to add a transaction.':'শুধুমাত্র আজকের দিনের ক্যাশ এন্ট্রি রেকর্ড করা যাবে। ট্রানজ্যাকশন যোগ করতে আজকের তারিখ নির্বাচন করুন।',
+  'Enter a cash amount greater than ₹0.':'₹0-এর বেশি ক্যাশের পরিমাণ লিখুন।',
+  'Select a cash department.':'একটি ক্যাশ ডিপার্টমেন্ট নির্বাচন করুন।',
+  'Only the Inventory Manager can edit cash transactions.':'শুধুমাত্র ইনভেন্টরি ম্যানেজার ক্যাশ ট্রানজ্যাকশন এডিট করতে পারবেন।',
+  'That cash transaction no longer exists.':'এই ক্যাশ ট্রানজ্যাকশনটি আর নেই।',
+  'This cash transaction is already inactive.':'এই ক্যাশ ট্রানজ্যাকশনটি ইতিমধ্যে নিষ্ক্রিয়।',
+  'edit today’s cash transaction':'আজকের ক্যাশ ট্রানজ্যাকশন এডিট করতে',
+  'edit a past cash transaction':'পুরনো ক্যাশ ট্রানজ্যাকশন এডিট করতে',
+  'Cash activity':'ক্যাশ কার্যকলাপ',
+  'Cash transaction monitor':'ক্যাশ ট্রানজ্যাকশন মনিটর',
+  'Inventory Manager and Cashier entries · live today, on-call for older dates':'ইনভেন্টরি ম্যানেজার ও ক্যাশিয়ারের এন্ট্রি · আজ লাইভ, পুরনো তারিখে অন-কল',
+  'Open full cash monitor':'সম্পূর্ণ ক্যাশ মনিটর খুলুন',
+  'No records found for this date.':'এই তারিখে কোনো রেকর্ড পাওয়া যায়নি।',
+  'Waiting for today’s cash activity.':'আজকের ক্যাশ কার্যকলাপের অপেক্ষায়।',
+  'Cash-only department':'শুধু ক্যাশ ডিপার্টমেন্ট',
+  'Inventory-only department':'শুধু ইনভেন্টরি ডিপার্টমেন্ট',
+  'Department type':'ডিপার্টমেন্টের ধরন',
+  'Cash departments and inventory departments are separate and never appear in each other’s selectors.':'ক্যাশ ও ইনভেন্টরি ডিপার্টমেন্ট আলাদা এবং একে অপরের সিলেক্টরে কখনও দেখা যাবে না।'
+});
+
 let currentLanguage = localStorage.getItem(LANGUAGE_KEY) === 'bn' ? 'bn' : 'en';
 
 function t(value) {
@@ -2279,7 +2425,7 @@ window.addEventListener('popstate', (event) => {
  * This is delegated from #app so navigation continues to work even when
  * dashboard cards are re-rendered dynamically.
  */
-root.addEventListener('click', (event) => {
+root.addEventListener('click', async (event) => {
   const card = event.target.closest('[data-action]');
   if (!card || !root.contains(card)) return;
   const action = card.dataset.action;
@@ -2290,6 +2436,18 @@ root.addEventListener('click', (event) => {
   if (action === 'stock') { navigate('stock'); return; }
   if (action === 'dispatch') { navigate('dispatch'); return; }
   if (action === 'receive') { navigate('receive'); return; }
+  if (action === 'cash') {
+    if(!isCashRole()) return showTemporaryMessage('Only Cashier or Inventory Manager can open the cash ledger.','error');
+    try {
+      await requirePin('open the cash ledger');
+      cashAccessGranted = true;
+      navigate('cash');
+    } catch (err) {
+      showTemporaryMessage(friendlyError(err), 'error');
+    }
+    return;
+  }
+  if (action === 'cash-admin') { if(membership?.role!=='admin') return showTemporaryMessage('Only the company Admin can open the cash monitor.','error'); navigate('cash-admin'); return; }
   if (action === 'requests') { navigate('requests'); return; }
   if (action === 'stats') { navigate('stats'); return; }
   if (action === 'history') { navigate('history'); return; }
@@ -2603,7 +2761,7 @@ function scheduleRealtimeRefresh(kind) {
   // Stock and Requests already have focused listeners that update their visible
   // cards/lists in place. For read-only/log pages, redraw after Firestore settles.
   if (['stock','requests'].includes(view)) return;
-  if (!['home','dispatch','receive','history','logbook','stats','admin','tm-order-list','tm-live-report'].includes(view)) return;
+  if (!['home','dispatch','receive','history','logbook','stats','admin','cash','cash-admin','tm-order-list','tm-live-report'].includes(view)) return;
   if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
   realtimeRefreshTimer = setTimeout(() => {
     realtimeRefreshTimer = null;
@@ -3177,6 +3335,359 @@ function buildTransactionManagerDailyCsvFile(day, rows, items, activity='all', d
 async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareCsvFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`); }
 function downloadTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); const url=URL.createObjectURL(file); const a=document.createElement('a'); a.href=url; a.download=file.name; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); return 'downloaded'; }
 
+
+/* =========================================================
+   CASH LEDGER
+   Cash departments are intentionally separate from inventory
+   departments. Cash is an auditable, date-keyed ledger:
+   positive amounts are receipts, negative amounts are outflows.
+   ========================================================= */
+let homeCashMonitorCleanup = null;
+let cashPageUnsubscribe = null;
+// Opening the Cash workspace itself is a protected action. This short-lived
+// in-memory flag is cleared whenever the user leaves the Cash screen, so the
+// browser Back button cannot reopen the ledger without verification.
+let cashAccessGranted = false;
+
+function isCashRole(role = membership?.role) {
+  return ['inventory_manager', 'cashier'].includes(normalizedRole(role));
+}
+function isCashEditRole(role = membership?.role) {
+  return normalizedRole(role) === 'inventory_manager';
+}
+function cashTypeLabel(type) {
+  return String(type || '').toLowerCase() === 'outflow' ? 'Cash outflow' : 'Cash received';
+}
+function cashSignedAmount(row) {
+  const n = Number(row?.amount || 0);
+  return String(row?.type || '').toLowerCase() === 'outflow' ? -Math.abs(n) : Math.abs(n);
+}
+function cashAmountText(row) {
+  const n = Math.abs(Number(row?.amount || 0));
+  return `₹${n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+}
+function cashRowsSort(rows) {
+  return [...rows].sort((a,b) => {
+    const ta = a.createdAt?.toMillis?.() || 0, tb = b.createdAt?.toMillis?.() || 0;
+    return tb - ta;
+  });
+}
+async function listCashDepartments() {
+  const companyId = currentCompanyId();
+  if (!companyId) return [];
+  const snap = await getDocs(collection(db, 'companies', companyId, 'cashDepartments'));
+  return snap.docs.map(d => ({id:d.id, ...d.data()}))
+    .sort((a,b)=>(a.nameLower||a.name||'').localeCompare(b.nameLower||b.name||'',undefined,{sensitivity:'base'}));
+}
+async function createCashDepartment(name) {
+  const companyId = currentCompanyId();
+  if (!companyId || membership?.role !== 'admin') throw new Error('Only the company Admin can manage cash departments.');
+  const clean = String(name || '').trim().replace(/\s+/g,' ');
+  if (clean.length < 2) throw new Error('Enter a valid cash department name.');
+  const existing = await listCashDepartments();
+  if (existing.some(d => String(d.nameLower || d.name || '').toLowerCase() === clean.toLowerCase())) {
+    throw new Error('That cash department already exists.');
+  }
+  const ref = doc(collection(db,'companies',companyId,'cashDepartments'));
+  await setDoc(ref,{name:clean,nameLower:clean.toLowerCase(),createdAt:serverTimestamp(),createdByUid:auth.currentUser?.uid||'',createdByEmail:auth.currentUser?.email?.toLowerCase()||''});
+}
+async function deleteCashDepartment(departmentId) {
+  const companyId=currentCompanyId();
+  if (!companyId || membership?.role !== 'admin') throw new Error('Only the company Admin can manage cash departments.');
+  await deleteDoc(doc(db,'companies',companyId,'cashDepartments',departmentId));
+}
+async function getCashRowsForDay(day) {
+  const companyId=currentCompanyId();
+  if (!companyId) return [];
+  const q = query(collection(db,'companies',companyId,'cashTransactions'), where('dateKey','==',day));
+  const snap = await getDocs(q);
+  return cashRowsSort(snap.docs.map(d=>({id:d.id,...d.data()})).filter(r=>r.deleted !== true && r.active !== false));
+}
+async function getCashBalanceBeforeDay(day) {
+  const companyId=currentCompanyId();
+  if (!companyId) return 0;
+  const q = query(collection(db,'companies',companyId,'cashTransactions'), where('dateKey','<',day));
+  const snap = await getDocs(q);
+  return snap.docs.reduce((sum,d)=>{
+    const r=d.data()||{};
+    if(r.deleted===true || r.active===false) return sum;
+    return sum + cashSignedAmount(r);
+  },0);
+}
+function cashSummary(rows, opening=0) {
+  const received=rows.filter(r=>String(r.type)==='received').reduce((s,r)=>s+Math.abs(Number(r.amount||0)),0);
+  const outflow=rows.filter(r=>String(r.type)==='outflow').reduce((s,r)=>s+Math.abs(Number(r.amount||0)),0);
+  return {received,outflow,opening,closing:opening+received-outflow};
+}
+async function listCashRevisions(transactionId) {
+  const companyId=currentCompanyId();
+  if(!companyId) return [];
+  const snap=await getDocs(collection(db,'companies',companyId,'cashTransactions',transactionId,'revisions'));
+  return snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.changedAt?.toMillis?.()||0)-(a.changedAt?.toMillis?.()||0));
+}
+async function createCashTransaction({dateKey,type,amount,department,note}) {
+  if(!isCashRole()) throw new Error('Only Cashier or Inventory Manager can record cash transactions.');
+  if(dateKey !== localDateKey()) throw new Error('Cash entries can only be recorded for today. Select today to add a transaction.');
+  const n=Number(amount);
+  if(!Number.isFinite(n)||n<=0) throw new Error('Enter a cash amount greater than ₹0.');
+  if(!department) throw new Error('Select a cash department.');
+  await requirePin('record a cash transaction');
+  const companyId=currentCompanyId(), user=auth.currentUser;
+  const ref=doc(collection(db,'companies',companyId,'cashTransactions'));
+  await setDoc(ref,{
+    dateKey, type:type==='outflow'?'outflow':'received', amount:Number(n.toFixed(2)),
+    department:String(department).trim(), note:String(note||'').trim(),
+    byUid:user.uid, byEmail:user.email?.toLowerCase()||'', byRole:membership?.role||'',
+    byName:user.displayName||'', createdAt:serverTimestamp(), active:true, deleted:false, editCount:0
+  });
+}
+async function updateCashTransaction(transactionId, changes, securityVerified=false) {
+  if(!isCashEditRole()) throw new Error('Only the Inventory Manager can edit cash transactions.');
+  const companyId=currentCompanyId(), user=auth.currentUser;
+  const ref=doc(db,'companies',companyId,'cashTransactions',transactionId);
+  const snap=await getDoc(ref);
+  if(!snap.exists()) throw new Error('That cash transaction no longer exists.');
+  const row=snap.data()||{};
+  const day=String(row.dateKey||'');
+  const today=localDateKey();
+  const n=Number(changes.amount);
+  if(!Number.isFinite(n)||n<=0) throw new Error('Enter a cash amount greater than ₹0.');
+  if(!changes.department) throw new Error('Select a cash department.');
+  if(!securityVerified) await requirePin(day===today ? 'edit today’s cash transaction' : 'edit a past cash transaction');
+  const revision=doc(collection(ref,'revisions'));
+  await runTransaction(db,async(tx)=>{
+    const fresh=await tx.get(ref);
+    if(!fresh.exists()) throw new Error('That cash transaction no longer exists.');
+    const current=fresh.data()||{};
+    if(current.deleted===true || current.active===false) throw new Error('This cash transaction is already inactive.');
+    tx.set(revision,{
+      action:'edit', version:Number(current.editCount||0)+1,
+      previousType:current.type||'', previousAmount:Number(current.amount||0),
+      previousDepartment:current.department||'', previousNote:current.note||'',
+      previousDateKey:current.dateKey||'', previousByUid:current.byUid||'', previousByEmail:current.byEmail||'', previousByRole:current.byRole||'',
+      previousCreatedAt:current.createdAt||null,
+      currentType:changes.type==='outflow'?'outflow':'received', currentAmount:Number(n.toFixed(2)),
+      currentDepartment:String(changes.department).trim(), currentNote:String(changes.note||'').trim(),
+      currentDateKey:current.dateKey||'', changedByUid:user.uid, changedByEmail:user.email?.toLowerCase()||'',
+      changedByRole:membership?.role||'', changedAt:serverTimestamp()
+    });
+    tx.update(ref,{
+      type:changes.type==='outflow'?'outflow':'received', amount:Number(n.toFixed(2)),
+      department:String(changes.department).trim(), note:String(changes.note||'').trim(),
+      editedAt:serverTimestamp(), editedByUid:user.uid, editedByEmail:user.email?.toLowerCase()||'',
+      editedByRole:membership?.role||'', editCount:Number(current.editCount||0)+1
+    });
+  });
+}
+function closeCashEditModal(){ document.querySelector('#cash-edit-modal')?.remove(); }
+function openCashEditModal(row, departments, onSave) {
+  closeCashEditModal();
+  const overlay=document.createElement('div'); overlay.id='cash-edit-modal'; overlay.className='modal-overlay cash-edit-overlay';
+  overlay.innerHTML=`<div class="cash-edit-modal" role="dialog" aria-modal="true" aria-labelledby="cash-edit-title">
+    <div class="inventory-edit-header"><div><p class="eyebrow">Cash ledger</p><h2 id="cash-edit-title">Edit cash transaction</h2></div><button type="button" class="modal-close" id="cash-edit-close" aria-label="Close">×</button></div>
+    <div class="inventory-edit-body">
+      <div class="field"><label for="cash-edit-type">Transaction type</label><select id="cash-edit-type"><option value="received" ${row.type==='received'?'selected':''}>Cash received</option><option value="outflow" ${row.type==='outflow'?'selected':''}>Cash outflow</option></select></div>
+      <div class="field"><label for="cash-edit-amount">Amount (₹)</label><input id="cash-edit-amount" type="number" min="0.01" step="0.01" value="${escapeHtml(String(row.amount||''))}"></div>
+      <div class="field"><label for="cash-edit-department">Cash department</label><select id="cash-edit-department">${departments.map(d=>`<option value="${escapeHtml(d.name)}" ${d.name===row.department?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="cash-edit-note">Note</label><input id="cash-edit-note" type="text" maxlength="160" value="${escapeHtml(row.note||'')}"></div>
+      <div class="cash-edit-locked-note">📅 Date is locked: <strong>${escapeHtml(row.dateKey||'')}</strong></div>
+      <div id="cash-edit-message"></div>
+    </div>
+    <div class="inventory-edit-footer"><button type="button" class="btn btn-secondary" id="cash-edit-cancel">Cancel</button><button type="button" class="btn btn-primary" id="cash-edit-save">Save changes</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const close=()=>closeCashEditModal();
+  overlay.querySelector('#cash-edit-close').addEventListener('click',close);
+  overlay.querySelector('#cash-edit-cancel').addEventListener('click',close);
+  overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
+  overlay.querySelector('#cash-edit-save').addEventListener('click',()=>{
+    onSave({
+      type:overlay.querySelector('#cash-edit-type').value,
+      amount:overlay.querySelector('#cash-edit-amount').value,
+      department:overlay.querySelector('#cash-edit-department').value,
+      note:overlay.querySelector('#cash-edit-note').value
+    },overlay);
+  });
+}
+function showCashPastEditWarning(row, onContinue) {
+  const old=document.querySelector('#cash-past-warning'); if(old) old.remove();
+  const overlay=document.createElement('div'); overlay.id='cash-past-warning'; overlay.className='modal-overlay cash-danger-overlay';
+  overlay.innerHTML=`<div class="cash-danger-modal" role="alertdialog" aria-modal="true">
+    <div class="cash-danger-icon">⚠️</div><p class="cash-danger-label">DANGEROUS ACTION</p><h2>Edit a locked past-day cash record?</h2>
+    <p>This day is already closed. Editing it will change that day’s closing balance and automatically recalculate the opening/closing balance of every following day.</p>
+    <div class="cash-danger-list"><strong>Before continuing:</strong><span>• Inventory Manager authorization is required.</span><span>• Fingerprint/face or PIN verification is required.</span><span>• A permanent change record will be saved.</span></div>
+    <div class="cash-danger-actions"><button class="btn btn-secondary" id="cash-danger-cancel">Cancel</button><button class="btn btn-danger" id="cash-danger-continue">I understand — continue</button></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#cash-danger-cancel').addEventListener('click',()=>overlay.remove());
+  overlay.querySelector('#cash-danger-continue').addEventListener('click',async()=>{
+    const b=overlay.querySelector('#cash-danger-continue'); b.disabled=true; b.textContent='Verifying…';
+    try{await requirePin('edit a locked past-day cash transaction'); overlay.remove(); await onContinue();}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;b.textContent='I understand — continue';}
+  });
+}
+function showCashChanges(row) {
+  listCashRevisions(row.id).then(revisions=>{
+    const overlay=document.createElement('div'); overlay.id='cash-changes-modal'; overlay.className='modal-overlay';
+    overlay.innerHTML=`<div class="cash-changes-modal" role="dialog" aria-modal="true"><div class="inventory-edit-header"><div><p class="eyebrow">Audit trail</p><h2>View Changes</h2></div><button class="modal-close" id="cash-changes-close" type="button">×</button></div>
+    <div class="cash-change-list">${revisions.length?revisions.map(r=>`<div class="cash-change-card"><strong>Version ${escapeHtml(r.version||'')}</strong><span>${escapeHtml(formatDate(r.changedAt))} · ${escapeHtml(shortPersonId(r.changedByEmail,r.changedByRole||''))}</span><p>${escapeHtml(cashTypeLabel(r.previousType))} ${cashAmountText({amount:r.previousAmount})} → ${escapeHtml(cashTypeLabel(r.currentType))} ${cashAmountText({amount:r.currentAmount})}</p><small>${escapeHtml(r.previousDepartment||'')} → ${escapeHtml(r.currentDepartment||'')}${r.previousNote!==r.currentNote?` · Note changed`:''}</small></div>`).join(''):'<div class="empty-team"><div class="empty-icon">🧾</div><strong>No changes recorded</strong><span>This transaction is still at its original version.</span></div>'}</div></div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#cash-changes-close').addEventListener('click',()=>overlay.remove());
+    overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove();});
+  }).catch(err=>showTemporaryMessage(friendlyError(err),'error'));
+}
+function cashTransactionRowHtml(row,{canEdit=false}={}) {
+  const edited=Number(row.editCount||0)>0;
+  return `<div class="cash-transaction-row ${edited?'is-edited':''}">
+    <div class="cash-tx-main"><div class="cash-tx-type ${row.type==='outflow'?'outflow':'received'}">${row.type==='outflow'?'↘':'↗'}</div><div><strong>${row.type==='outflow'?'Spent':'Received'} · ${cashAmountText(row)}</strong><span>${escapeHtml(row.department||'—')} · ${escapeHtml(shortDisplayName(row.byEmail,row.byName))} · ${escapeHtml(shortPersonId(row.byEmail,row.byRole||''))}</span><small>${escapeHtml(row.note||'No note')} · ${escapeHtml(formatDate(row.createdAt))}</small></div></div>
+    <div class="cash-tx-actions">${edited?`<button type="button" class="small-action" data-cash-changes="${escapeHtml(row.id)}">View Changes</button>`:''}${canEdit?`<button type="button" class="small-action" data-cash-edit="${escapeHtml(row.id)}">Edit</button>`:''}</div>
+  </div>`;
+}
+async function renderCashPage() {
+  if(!isCashRole()){ navigate('home'); return; }
+
+  // Defense-in-depth: Cash cannot be reached only by clicking the home card.
+  // History navigation/direct SPA state also has to pass the same biometric/PIN gate.
+  if(!cashAccessGranted){
+    try{
+      await requirePin('open the cash ledger');
+      cashAccessGranted = true;
+    }catch(err){
+      showTemporaryMessage(friendlyError(err), 'error');
+      navigate('home', { replace:true });
+      return;
+    }
+  }
+
+  if(cashPageUnsubscribe){cashPageUnsubscribe();cashPageUnsubscribe=null;}
+  const today=localDateKey();
+  let departments=[], error='';
+  try{departments=await listCashDepartments();}catch(err){error=friendlyError(err);}
+  root.innerHTML=`<div class="dashboard feature-page cash-page"><div class="topbar"><button class="back-btn" id="cash-back">‹ Back</button><div class="topbar-brand">Inventro</div></div>
+    <section class="feature-header"><p class="eyebrow">Secure cash ledger</p><h1>Cash</h1><p>Record cash received and cash outflow by cash department. Today is open; completed days are locked.</p></section>
+    <section class="cash-balance-card" id="cash-balance-card"></section>
+    <section class="admin-card cash-entry-card">
+      <div class="admin-card-title"><div><h2>Record cash transaction</h2><p>Every save requires ${isMobileDevice()?'fingerprint/face or PIN':'your personal PIN'} verification.</p></div></div>
+      <div class="cash-entry-grid">
+        <div class="field"><label for="cash-day">Date</label><input id="cash-day" type="date" value="${today}" max="${today}"></div>
+        <div class="field"><label for="cash-type">Transaction type</label><select id="cash-type"><option value="received">Cash received</option><option value="outflow">Cash outflow</option></select></div>
+        <div class="field"><label for="cash-amount">Amount (₹)</label><input id="cash-amount" type="number" min="0.01" step="0.01" placeholder="0.00"></div>
+        <div class="field"><label for="cash-department">Cash department</label><select id="cash-department"><option value="">Select cash department…</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label for="cash-note">Note (optional)</label><input id="cash-note" type="text" maxlength="160" placeholder="e.g. Cash received from counter"></div>
+      <div id="cash-entry-lock" class="cash-entry-lock"></div>
+      <button class="btn btn-primary" id="cash-save" ${departments.length?'':'disabled'}>🔐 Record transaction</button>
+      ${departments.length?'':'<div class="cash-empty-departments"><strong>No cash departments configured.</strong><span>Ask the Admin to add a cash department in Admin Center → Departments → Cash.</span></div>'}
+    </section>
+    <section class="admin-card"><div class="admin-card-title"><div><h2>Transactions</h2><p id="cash-list-subtitle">Today’s cash transactions</p></div></div><div id="cash-transaction-list" class="cash-transaction-list"></div></section>
+  </div>`;
+  const dayInput=root.querySelector('#cash-day');
+  const refresh=async()=>{
+    const day=dayInput.value||today;
+    if(day>today){dayInput.value=today;return refresh();}
+    const isToday=day===today;
+    root.querySelector('#cash-entry-lock').innerHTML=isToday
+      ? '🔓 <strong>Today is open.</strong> New cash entries can be recorded.'
+      : '🔒 <strong>This day is closed.</strong> New entries are disabled. Inventory Manager can edit a past record only after the danger warning and verification.';
+    const save=root.querySelector('#cash-save');
+    if(save) save.disabled=!isToday || !departments.length;
+    const [rows,opening]=await Promise.all([getCashRowsForDay(day),getCashBalanceBeforeDay(day)]);
+    renderCashPageData(day,rows,opening);
+  };
+  window._inventroCashRefresh=refresh;
+  dayInput.addEventListener('change',refresh);
+  root.querySelector('#cash-back').addEventListener('click',()=>navigateBack('home'));
+  root.querySelector('#cash-save').addEventListener('click',async()=>{
+    const b=root.querySelector('#cash-save'); b.disabled=true; b.textContent='Checking security…';
+    try{
+      await createCashTransaction({dateKey:dayInput.value,type:root.querySelector('#cash-type').value,amount:root.querySelector('#cash-amount').value,department:root.querySelector('#cash-department').value,note:root.querySelector('#cash-note').value});
+      showTemporaryMessage('Cash transaction recorded.','success');
+      root.querySelector('#cash-amount').value=''; root.querySelector('#cash-note').value='';
+      await refresh();
+    }catch(err){showTemporaryMessage(friendlyError(err),'error');}
+    finally{b.disabled=dayInput.value!==today||!departments.length;b.textContent='🔐 Record transaction';}
+  });
+  const companyId=currentCompanyId();
+  const liveQuery=query(collection(db,'companies',companyId,'cashTransactions'),where('dateKey','==',today));
+  const unsub=onSnapshot(liveQuery,async snap=>{
+    if(dayInput.value===today){
+      const rows=snap.docs.map(d=>({id:d.id,...d.data()})).filter(r=>r.deleted!==true&&r.active!==false);
+      const opening=await getCashBalanceBeforeDay(today);
+      renderCashPageData(today,cashRowsSort(rows),opening);
+    }
+  },err=>console.warn('Cash realtime listener:',err));
+  cashPageUnsubscribe=unsub;
+  await refresh();
+}
+async function renderCashPageData(day,rows,opening){
+  const today=localDateKey(), summary=cashSummary(rows,opening);
+  const card=root.querySelector('#cash-balance-card');
+  if(card) card.innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(day)}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Closing balance</small></div><div class="cash-balance-status">${day===today?'LIVE':'LOCKED'}</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
+  const list=root.querySelector('#cash-transaction-list');
+  const subtitle=root.querySelector('#cash-list-subtitle');
+  if(subtitle) subtitle.textContent=`${day===today?'Today':'Locked past day'} · ${rows.length} transaction${rows.length===1?'':'s'}`;
+  if(list){
+    list.innerHTML=rows.length?rows.map(r=>cashTransactionRowHtml(r,{canEdit:isCashEditRole()})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(day)}.</strong><span>${day===today?'Record the first transaction above.':'This day has no recorded cash activity.'}</span></div>`;
+    list.querySelectorAll('[data-cash-edit]').forEach(btn=>btn.addEventListener('click',async()=>{
+      const row=rows.find(r=>r.id===btn.dataset.cashEdit); if(!row)return;
+      const isPast=row.dateKey!==today;
+      const open=async()=>{
+        openCashEditModal(row,await listCashDepartments(),async(values,modal)=>{
+          const save=modal.querySelector('#cash-edit-save'); save.disabled=true; save.textContent='Saving…';
+          try{await updateCashTransaction(row.id,values,true);closeCashEditModal();showTemporaryMessage('Cash transaction updated and balances recalculated.','success');await window._inventroCashRefresh?.();}
+          catch(err){showTemporaryMessage(friendlyError(err),'error');save.disabled=false;save.textContent='Save changes';}
+        });
+      };
+      if(isPast) showCashPastEditWarning(row,open); else {try{await requirePin('edit today’s cash transaction');await open();}catch(err){showTemporaryMessage(friendlyError(err),'error');}}
+    }));
+    list.querySelectorAll('[data-cash-changes]').forEach(btn=>{const row=rows.find(r=>r.id===btn.dataset.cashChanges);if(row)btn.addEventListener('click',()=>showCashChanges(row));});
+  }
+}
+function stopHomeCashMonitor(){
+  if(homeCashMonitorCleanup){try{homeCashMonitorCleanup();}catch(_){} homeCashMonitorCleanup=null;}
+}
+async function renderAdminCashHomeMonitor(){
+  if(membership?.role!=='admin') return;
+  stopHomeCashMonitor();
+  const host=root.querySelector('#admin-cash-home-monitor'); if(!host)return;
+  const today=localDateKey();
+  host.innerHTML=`<div class="cash-home-head"><div><p class="eyebrow">Cash activity</p><h2>Cash transaction monitor</h2><span>Inventory Manager and Cashier entries · live today, on-call for older dates</span></div><div class="cash-home-controls"><label for="admin-home-cash-day">Date</label><input id="admin-home-cash-day" type="date" value="${today}" max="${today}"></div></div><div id="admin-home-cash-summary"></div><div id="admin-home-cash-list" class="cash-transaction-list"></div><button type="button" class="btn btn-secondary cash-home-full-btn" id="admin-home-cash-open">Open full cash monitor</button>`;
+  const dayInput=host.querySelector('#admin-home-cash-day');
+  const load=async()=>{
+    const day=dayInput.value||today;
+    if(day>today){dayInput.value=today;return load();}
+    const [rows,opening]=await Promise.all([getCashRowsForDay(day),getCashBalanceBeforeDay(day)]);
+    const summary=cashSummary(rows,opening);
+    host.querySelector('#admin-home-cash-summary').innerHTML=`<div class="cash-home-summary"><div><span>Opening</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div class="closing"><span>Closing</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
+    const list=host.querySelector('#admin-home-cash-list');
+    list.innerHTML=rows.length?rows.slice(0,8).map(r=>cashTransactionRowHtml(r,{canEdit:false})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(day)}.</strong><span>${day===today?'Waiting for today’s cash activity.':'No records found for this date.'}</span></div>`;
+  };
+  dayInput.addEventListener('change',load);
+  host.querySelector('#admin-home-cash-open').addEventListener('click',()=>navigate('cash-admin'));
+  const todayQ=query(collection(db,'companies',currentCompanyId(),'cashTransactions'),where('dateKey','==',today));
+  const unsub=onSnapshot(todayQ,()=>{if(dayInput.value===today)load();},err=>console.warn('Admin home cash listener:',err));
+  homeCashMonitorCleanup=()=>unsub();
+  await load();
+}
+async function renderCashAdminPage(){
+  if(membership?.role!=='admin'){navigate('home');return;}
+  stopHomeCashMonitor();
+  const today=localDateKey();
+  root.innerHTML=`<div class="dashboard feature-page cash-page cash-admin-page"><div class="topbar"><button class="back-btn" id="cash-admin-back">‹ Back</button><div class="topbar-brand">Inventro</div></div><section class="feature-header"><p class="eyebrow">Administration · Cash</p><h1>Cash Monitor</h1><p>Company-wide cash ledger. Today updates in real time; older dates are loaded on demand.</p></section><section class="cash-balance-card" id="cash-admin-balance"></section><section class="admin-card"><div class="history-tools"><div><label for="cash-admin-day">Date</label><input id="cash-admin-day" type="date" value="${today}" max="${today}"></div></div><div id="cash-admin-list" class="cash-transaction-list"></div></section></div>`;
+  const dayInput=root.querySelector('#cash-admin-day');
+  const load=async()=>{
+    const day=dayInput.value||today;
+    const [rows,opening]=await Promise.all([getCashRowsForDay(day),getCashBalanceBeforeDay(day)]);
+    const summary=cashSummary(rows,opening);
+    root.querySelector('#cash-admin-balance').innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(day)}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Closing balance</small></div><div class="cash-balance-status">${day===today?'LIVE':'ON CALL'}</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
+    root.querySelector('#cash-admin-list').innerHTML=rows.length?rows.map(r=>cashTransactionRowHtml(r,{canEdit:false})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(day)}.</strong><span>No cash activity was recorded on this date.</span></div>`;
+  };
+  dayInput.addEventListener('change',load);
+  root.querySelector('#cash-admin-back').addEventListener('click',()=>navigateBack('home'));
+  const unsub=onSnapshot(query(collection(db,'companies',currentCompanyId(),'cashTransactions'),where('dateKey','==',today)),()=>{if(dayInput.value===today)load();},err=>console.warn('Admin cash listener:',err));
+  cashPageUnsubscribe=unsub;
+  await load();
+}
+
 function renderHome(membership) {
   if (!pinUnlocked()) { showPinGate(); return; }
   const user = auth.currentUser;
@@ -3194,6 +3705,8 @@ function renderHome(membership) {
     // they create a request, so their own "Stock" tile is redundant.
     ...(isStockRequesterRole(role) ? [] : [['📦','Stock','View live current kitchen stock','stock']]),
     ...(role === 'inventory_manager' ? [['⬆️','Dispatch','Send stock out directly','dispatch'],['⬇️','Receive Stock','Record newly arrived items','receive']] : []),
+    ...(['inventory_manager','cashier'].includes(role) ? [['💵','Cash','Record cash received and outflow','cash']] : []),
+    ...(isAdmin ? [['💵','Cash Monitor','Watch company cash activity','cash-admin']] : []),
     ...(canRequest ? [['📝','Requests','Create and manage kitchen stock requests','requests']] : []),
     ...(isAdmin ? [['👥','Admin','Manage your company team','admin']] : []),
     ['📊','Statistics','See stock and usage insights','stats'],
@@ -3242,6 +3755,7 @@ function renderHome(membership) {
   root.querySelector('#menu-signout')?.addEventListener('click',()=>{clearEmployeeCodeVerification();signOut();});
   root.querySelector('#enable-alerts')?.addEventListener('click',async()=>{try{await enableLowStockNotifications();}catch(err){showTemporaryMessage(friendlyError(err),'error');}});
   startHomeStatusListener();
+  if(isAdmin) renderAdminCashHomeMonitor();
   root.querySelector('#pin-settings-btn')?.addEventListener('click',renderPinSettings);
   root.querySelector('#biometric-settings-btn')?.addEventListener('click',async()=>{await renderBiometricSettings();renderHome(membership);});
 
@@ -4548,6 +5062,8 @@ async function renderAdmin() {
 
   let employees = [];
   let departments = [];
+  let cashDepartments = [];
+  let departmentMode = 'inventory';
   let adminItems = [];
   let error = '';
   let loading = true;
@@ -4615,7 +5131,7 @@ async function renderAdmin() {
               <div><h2>Add employee</h2></div>
             </div>
             <div class="field"><label for="employee-email">Employee Gmail</label><input type="text" id="employee-email" placeholder="employee@gmail.com" autocomplete="off" /></div>
-            <div class="field"><label for="employee-role">Role</label><select id="employee-role"><option value="inventory_manager">Inventory Manager</option><option value="transaction_manager">Transaction Manager</option><option value="stock_requester">Stock Requisitioner</option></select></div>
+            <div class="field"><label for="employee-role">Role</label><select id="employee-role"><option value="inventory_manager">Inventory Manager</option><option value="cashier">Cashier</option><option value="transaction_manager">Transaction Manager</option><option value="stock_requester">Stock Requisitioner</option></select></div>
             <div class="field"><label>Login access days</label><div class="day-grid">${WEEK_DAYS.map(([key, label]) => `<label class="day-option"><input type="checkbox" value="${key}" checked /><span>${label.slice(0, 3)}</span></label>`).join('')}</div></div>
             ${error ? `<div class="error-box">${escapeHtml(error)}</div>` : ''}
             <button class="btn btn-primary" id="add-employee-btn" ${loading ? 'disabled' : ''}>${loading ? '<span class="spinner spinner-dark"></span> Loading team…' : 'Add employee'}</button>
@@ -4628,7 +5144,7 @@ async function renderAdmin() {
                 <div class="employee-row" data-email="${escapeHtml(employee.email)}">
                   <div class="employee-main"><div class="employee-avatar">${escapeHtml((employee.email?.[0] || 'E').toUpperCase())}</div><div><strong>${escapeHtml(employee.displayName || shortDisplayName(employee.email))}</strong><span><b>${escapeHtml(shortPersonId(employee.email,employee.role))}</b> · <em>${escapeHtml(employee.email)}</em> · ${escapeHtml(roleLabel(employee.role))} · ${employee.status === 'active' ? 'Active' : 'Invited'}</span></div></div>
                   <div class="employee-controls">
-                    <select class="employee-role"><option value="inventory_manager" ${employee.role === 'inventory_manager' ? 'selected' : ''}>Inventory Manager</option><option value="transaction_manager" ${employee.role === 'transaction_manager' ? 'selected' : ''}>Transaction Manager</option><option value="stock_requester" ${isStockRequesterRole(employee.role) ? 'selected' : ''}>Stock Requisitioner</option></select>
+                    <select class="employee-role"><option value="inventory_manager" ${employee.role === 'inventory_manager' ? 'selected' : ''}>Inventory Manager</option><option value="cashier" ${employee.role === 'cashier' ? 'selected' : ''}>Cashier</option><option value="transaction_manager" ${employee.role === 'transaction_manager' ? 'selected' : ''}>Transaction Manager</option><option value="stock_requester" ${isStockRequesterRole(employee.role) ? 'selected' : ''}>Stock Requisitioner</option></select>
                     <div class="mini-days">${WEEK_DAYS.map(([key, label]) => `<label title="${label}"><input type="checkbox" data-day="${key}" ${employee.workingDays?.includes(key) ? 'checked' : ''} /><span>${key[0].toUpperCase()}</span></label>`).join('')}</div>
                     <button class="access-btn ${employee.status === 'active' ? 'disable' : 'enable'}" type="button">${employee.status === 'active' ? 'Disable login' : 'Enable login'}</button>
                   </div>
@@ -4653,11 +5169,23 @@ async function renderAdmin() {
         <div class="admin-panel ${activeTab === 'departments' ? 'active' : ''}" data-admin-panel="departments">
           <div class="admin-section-label">Department setup</div>
           <section class="admin-card">
-            <div class="admin-card-title"><div><h2>🏢 Add department</h2></div></div>
-            <div class="field"><label for="department-name">Department name</label><input id="department-name" type="text" maxlength="60" placeholder="e.g. Main Kitchen"></div>
-            <button class="btn btn-primary" id="add-department-btn" type="button">Add department</button>
+            <div class="admin-card-title"><div><h2>🏢 Department type</h2><p>Cash departments and inventory departments are separate and never appear in each other’s selectors.</p></div></div>
+            <div class="department-type-switch"><button type="button" class="department-type-btn ${departmentMode==='inventory'?'active':''}" data-dept-mode="inventory">📦 Inventory</button><button type="button" class="department-type-btn ${departmentMode==='cash'?'active':''}" data-dept-mode="cash">💵 Cash</button></div>
           </section>
-          <section class="admin-card"><div class="admin-card-title"><div><h2>Departments</h2><p>${departments.length} department${departments.length===1?'':'s'} configured.</p></div></div><div class="department-list">${departments.length?departments.map(d=>`<div class="department-row"><div><strong>${escapeHtml(d.name)}</strong><span>Available for dispatch, requests and history filters</span></div><button class="small-action reject" data-delete-department="${escapeHtml(d.id)}" type="button">Delete</button></div>`).join(''):`<div class="empty-team"><div class="empty-icon">🏢</div><strong>No departments yet</strong><span>Add at least one department before staff can dispatch/request stock for it.</span></div>`}</div></section>
+          ${departmentMode==='inventory'?`
+          <section class="admin-card">
+            <div class="admin-card-title"><div><h2>📦 Add inventory department</h2><p>Used for stock dispatches, requests and inventory history.</p></div></div>
+            <div class="field"><label for="department-name">Department name</label><input id="department-name" type="text" maxlength="60" placeholder="e.g. Main Kitchen"></div>
+            <button class="btn btn-primary" id="add-department-btn" type="button">Add inventory department</button>
+          </section>
+          <section class="admin-card"><div class="admin-card-title"><div><h2>Inventory departments</h2><p>${departments.length} configured.</p></div></div><div class="department-list">${departments.length?departments.map(d=>`<div class="department-row"><div><strong>${escapeHtml(d.name)}</strong><span>Inventory-only department</span></div><button class="small-action reject" data-delete-department="${escapeHtml(d.id)}" type="button">Delete</button></div>`).join(''):`<div class="empty-team"><div class="empty-icon">📦</div><strong>No inventory departments yet</strong><span>Add one before staff can dispatch or request stock.</span></div>`}</div></section>`
+          :`
+          <section class="admin-card">
+            <div class="admin-card-title"><div><h2>💵 Add cash department</h2><p>Used only for cash received and cash outflow records.</p></div></div>
+            <div class="field"><label for="cash-department-name">Cash department name</label><input id="cash-department-name" type="text" maxlength="60" placeholder="e.g. Counter Cash"></div>
+            <button class="btn btn-primary" id="add-cash-department-btn" type="button">Add cash department</button>
+          </section>
+          <section class="admin-card"><div class="admin-card-title"><div><h2>Cash departments</h2><p>${cashDepartments.length} configured.</p></div></div><div class="department-list">${cashDepartments.length?cashDepartments.map(d=>`<div class="department-row"><div><strong>${escapeHtml(d.name)}</strong><span>Cash-only department</span></div><button class="small-action reject" data-delete-cash-department="${escapeHtml(d.id)}" type="button">Delete</button></div>`).join(''):`<div class="empty-team"><div class="empty-icon">💵</div><strong>No cash departments yet</strong><span>Add one before Cashier or Inventory Manager can record cash.</span></div>`}</div></section>`}
         </div>
 
         <div class="admin-panel ${activeTab === 'company' ? 'active' : ''}" data-admin-panel="company">
@@ -4728,8 +5256,11 @@ async function renderAdmin() {
     });
 
     root.querySelectorAll('[data-admin-tab]').forEach((btn) => btn.addEventListener('click', () => draw(btn.dataset.adminTab)));
+     root.querySelectorAll('[data-dept-mode]').forEach(btn=>btn.addEventListener('click',()=>{departmentMode=btn.dataset.deptMode;draw('departments');}));
     root.querySelector('#add-department-btn')?.addEventListener('click', async () => { const b=root.querySelector('#add-department-btn'); b.disabled=true; try{await createDepartment(root.querySelector('#department-name').value); showTemporaryMessage('Department added.','success'); departments=await listDepartments(); draw('departments');}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;} });
-    root.querySelectorAll('[data-delete-department]').forEach(btn=>btn.addEventListener('click',async()=>{if(!confirm('Delete this department? Existing history will remain, but it will no longer be available for new dispatches or requests.'))return;btn.disabled=true;try{await deleteDepartment(btn.dataset.deleteDepartment);showTemporaryMessage('Department deleted.','success');departments=await listDepartments();draw('departments');}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));
+    root.querySelectorAll('[data-delete-department]').forEach(btn=>btn.addEventListener('click',async()=>{if(!confirm('Delete this inventory department? Existing history will remain.'))return;btn.disabled=true;try{await deleteDepartment(btn.dataset.deleteDepartment);showTemporaryMessage('Inventory department deleted.','success');departments=await listDepartments();draw('departments');}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));
+     root.querySelector('#add-cash-department-btn')?.addEventListener('click',async()=>{const b=root.querySelector('#add-cash-department-btn');b.disabled=true;try{await createCashDepartment(root.querySelector('#cash-department-name').value);showTemporaryMessage('Cash department added.','success');cashDepartments=await listCashDepartments();draw('departments');}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;}});
+     root.querySelectorAll('[data-delete-cash-department]').forEach(btn=>btn.addEventListener('click',async()=>{if(!confirm(t('Delete this cash department? Existing cash history will remain.')))return;btn.disabled=true;try{await deleteCashDepartment(btn.dataset.deleteCashDepartment);showTemporaryMessage('Cash department deleted.','success');cashDepartments=await listCashDepartments();draw('departments');}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));
 
     const editItemsBox=root.querySelector('#admin-edit-items');
     const adminItemSearch=root.querySelector('#admin-item-search');
@@ -4814,7 +5345,7 @@ async function renderAdmin() {
 
   async function loadEmployees() {
     loading = true; error = ''; draw(activeTab);
-    try { employees = await listEmployees(); departments = await listDepartments(); adminItems = await listItems(); }
+    try { employees = await listEmployees(); departments = await listDepartments(); cashDepartments = await listCashDepartments(); adminItems = await listItems(); }
     catch (err) { error = friendlyError(err); }
     finally { loading = false; draw(activeTab); }
   }
@@ -4875,6 +5406,9 @@ let view = 'loading', membership = null, justCreatedCode = null, returnToJoinAft
 
 function render() {
   startLanguageSystem();
+  if(view!=='cash') cashAccessGranted = false;
+  if(view!=='home') stopHomeCashMonitor();
+  if(!['cash','cash-admin'].includes(view) && cashPageUnsubscribe){cashPageUnsubscribe();cashPageUnsubscribe=null;}
   if (auth.currentUser && membership && isMobileDevice() && !['welcome','loading','employeeCode'].includes(view) && !pinUnlocked()) { showPinGate(); return; }
   if (view !== 'stock') stopStockListener();
   if (view !== 'requests') stopRequestListListener();
@@ -4915,6 +5449,12 @@ function render() {
     case 'receive':
       renderMovement('receive');
       break;
+    case 'cash':
+      renderCashPage();
+      break;
+    case 'cash-admin':
+      renderCashAdminPage();
+      break;
     case 'requests':
       renderRequests();
       break;
@@ -4954,6 +5494,8 @@ onAuthStateChanged(auth, async (user) => {
     if (homeStatusUnsubscribe) homeStatusUnsubscribe();
     homeStatusUnsubscribe = null;
     stopHomeRequestNotificationAlert();
+    stopHomeCashMonitor();
+    if(cashPageUnsubscribe){cashPageUnsubscribe();cashPageUnsubscribe=null;}
     clearAppIconBadge();
     membership = null;
     if (returnToJoinAfterSignOut) {
