@@ -1,9 +1,10 @@
-const CACHE = 'inventro-shell-v102';
+const CACHE = 'inventro-shell-v106';
+
 const CORE = [
   './',
   './index.html',
-  './style.css?v=102',
-  './app.js?v=100',
+  './style.css?v=104',
+  './app.js?v=104',
   './manifest.json'
 ];
 
@@ -32,29 +33,18 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  if (
-    event.request.method !== 'GET' ||
-    url.origin !== location.origin
-  ) {
-    return;
-  }
+  if (event.request.method !== 'GET' || url.origin !== location.origin) return;
 
   event.respondWith(
     fetch(event.request)
       .then(response => {
         const copy = response.clone();
-
-        caches.open(CACHE).then(cache => {
-          cache.put(event.request, copy);
-        });
-
+        caches.open(CACHE).then(cache => cache.put(event.request, copy));
         return response;
       })
       .catch(() =>
         caches.match(event.request)
-          .then(response =>
-            response || caches.match('./index.html')
-          )
+          .then(r => r || caches.match('./index.html'))
       )
   );
 });
