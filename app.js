@@ -2448,6 +2448,7 @@ function navigateHistoryWorkspace(historyRole) {
   }
   history.pushState({ inventro: true, view: 'history', historyRole }, '', location.href);
   renderHistory(historyRole);
+  animateRenderedPage();
 }
 
 function navigateHistoryMenuBack() {
@@ -2479,6 +2480,7 @@ window.addEventListener('popstate', (event) => {
   view = auth.currentUser ? (membership ? 'home' : 'welcome') : 'welcome';
   history.replaceState({ inventro: true, view }, '', location.href);
   render();
+  animateRenderedPage();
 });
 
 /*
