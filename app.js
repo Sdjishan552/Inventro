@@ -609,53 +609,196 @@ function showPinGate(){
 }
 
 
+const ITEM_IMAGE_ALIASES = {
+  apple: ['apple fruit', 'red apple fruit'],
+  আপেল: ['apple fruit', 'red apple fruit'],
+  kaju: ['cashew', 'cashew nut', 'cashew nuts'],
+  কাজু: ['cashew', 'cashew nut'],
+  cashew: ['cashew', 'cashew nut'],
+  badam: ['almond', 'almond nuts'],
+  বাদাম: ['almond', 'almond nuts'],
+  almond: ['almond', 'almond nuts'],
+  peanut: ['peanut', 'groundnut'],
+  groundnut: ['peanut', 'groundnut'],
+  chini: ['sugar', 'white sugar'],
+  চিনি: ['sugar', 'white sugar'],
+  sugar: ['sugar', 'white sugar'],
+  nun: ['salt', 'table salt'],
+  লবণ: ['salt', 'table salt'],
+  salt: ['salt', 'table salt'],
+  chaal: ['rice grain', 'uncooked rice'],
+  চাল: ['rice grain', 'uncooked rice'],
+  rice: ['rice grain', 'uncooked rice'],
+  atta: ['wheat flour', 'atta flour'],
+  আটা: ['wheat flour', 'atta flour'],
+  maida: ['refined wheat flour', 'maida flour'],
+  ময়দা: ['refined wheat flour', 'maida flour'],
+  dal: ['lentils', 'dal pulses'],
+  ডাল: ['lentils', 'dal pulses'],
+  masoor: ['red lentils', 'masoor dal'],
+  মসুর: ['red lentils', 'masoor dal'],
+  aloo: ['potato', 'potatoes'],
+  আলু: ['potato', 'potatoes'],
+  potato: ['potato', 'potatoes'],
+  piyaj: ['onion', 'red onion'],
+  পেঁয়াজ: ['onion', 'red onion'],
+  onion: ['onion', 'red onion'],
+  rosun: ['garlic', 'garlic cloves'],
+  রসুন: ['garlic', 'garlic cloves'],
+  garlic: ['garlic', 'garlic cloves'],
+  ada: ['ginger root', 'fresh ginger'],
+  আদা: ['ginger root', 'fresh ginger'],
+  ginger: ['ginger root', 'fresh ginger'],
+  tomato: ['tomato', 'fresh tomatoes'],
+  টমেটো: ['tomato', 'fresh tomatoes'],
+  'kancha lonka': ['green chilli', 'green chili pepper'],
+  'কাঁচা লঙ্কা': ['green chilli', 'green chili pepper'],
+  lemon: ['lemon fruit', 'fresh lemon'],
+  লেবু: ['lemon fruit', 'fresh lemon'],
+  dhone: ['coriander leaves', 'fresh coriander'],
+  ধনে: ['coriander leaves', 'fresh coriander'],
+  coriander: ['coriander leaves', 'fresh coriander'],
+  dudh: ['milk', 'fresh milk'],
+  দুধ: ['milk', 'fresh milk'],
+  milk: ['milk', 'fresh milk'],
+  doi: ['yogurt', 'curd'],
+  দই: ['yogurt', 'curd'],
+  yogurt: ['yogurt', 'curd'],
+  dim: ['chicken egg', 'eggs'],
+  ডিম: ['chicken egg', 'eggs'],
+  egg: ['chicken egg', 'eggs'],
+  murgi: ['chicken meat', 'raw chicken'],
+  মুরগি: ['chicken meat', 'raw chicken'],
+  chicken: ['chicken meat', 'raw chicken'],
+  মাছ: ['fresh fish', 'fish'],
+  mach: ['fresh fish', 'fish'],
+  fish: ['fresh fish', 'fish'],
+  mangsho: ['meat', 'raw meat'],
+  মাংস: ['meat', 'raw meat'],
+  paneer: ['paneer cheese', 'indian paneer'],
+  পনির: ['paneer cheese', 'indian paneer']
+};
+
+function normalizeItemImageText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[(){}\[\],.!?;:/\\|]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function itemImageQueries(itemName) {
+  const raw = normalizeItemImageText(itemName);
+  const compact = raw.replace(/\s+/g, '');
+  const aliases = ITEM_IMAGE_ALIASES[raw] || ITEM_IMAGE_ALIASES[compact] || [];
+  const queries = [];
+
+  // Use food/ingredient meanings first so ambiguous names such as "apple"
+  // do not resolve to Apple Inc., a logo, or another unrelated result.
+  queries.push(...aliases);
+  if (raw && !aliases.length) {
+    queries.push(`${raw} food`, `${raw} ingredient`, raw);
+  }
+  return [...new Set(queries.filter(Boolean))].slice(0, 5);
+}
+
+function scoreItemImageTitle(title, query) {
+  const t = normalizeItemImageText(title);
+  const qTokens = normalizeItemImageText(query).split(' ').filter(Boolean);
+  if (!t || !qTokens.length) return -1000;
+
+  // Reject common non-item results.
+  if (/logo|brand|company|corporation|film|song|album|person|map|flag|diagram|screenshot|icon|poster|building/.test(t)) return -1000;
+
+  let score = 0;
+  const exact = normalizeItemImageText(query);
+  if (t.includes(exact)) score += 40;
+
+  for (const token of qTokens) {
+    if (t.includes(token)) score += 12;
+  }
+
+  // Prefer actual food/ingredient photographs.
+  if (/fruit|food|ingredient|fresh|raw|nut|nuts|vegetable|meat|grain|spice|herb|milk|cheese|rice|flour/.test(t)) score += 18;
+  if (/apple fruit|cashew|cashew nut|almond|potato|onion|garlic|ginger|tomato/.test(t)) score += 12;
+  if (/drawing|illustration|symbol|character/.test(t)) score -= 20;
+  return score;
+}
+
+async function searchCommonsImage(query) {
+  const q = encodeURIComponent(query);
+  const endpoint = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrnamespace=6&gsrlimit=20&prop=imageinfo&iiprop=url|mime&iiurlwidth=500&format=json&origin=*`;
+  const r = await fetch(endpoint);
+  if (!r.ok) return null;
+
+  const data = await r.json();
+  const pages = Object.values(data?.query?.pages || {});
+  const ranked = pages
+    .map(page => {
+      const info = page?.imageinfo?.[0];
+      const title = page?.title || '';
+      const mime = info?.mime || '';
+      const url = info?.thumburl || info?.url || '';
+      return {
+        title,
+        url,
+        score: scoreItemImageTitle(title, query) + (mime.startsWith('image/') ? 5 : 0)
+      };
+    })
+    .filter(x => x.url && x.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return ranked[0] || null;
+}
+
 async function fetchItemImage(itemName) {
-  const clean = itemName.trim();
+  const clean = String(itemName || '').trim();
   if (!clean) return {url:'',source:''};
 
-  // 1) Wikipedia: useful for generic ingredients such as rice, flour, milk, etc.
+  const queries = itemImageQueries(clean);
+
+  // 1) Wikimedia Commons is the primary source. Multiple semantic queries
+  // support English, Bengali, transliterated Bengali and common Indian names.
+  for (const query of queries) {
+    try {
+      const found = await searchCommonsImage(query);
+      if (found?.url) return {url:found.url, source:'Wikimedia Commons'};
+    } catch (_) {}
+  }
+
+  // 2) Open Food Facts fallback for packaged/branded food products.
+  for (const query of queries.slice(0, 3)) {
+    try {
+      const q = encodeURIComponent(query);
+      const r = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=12`);
+      if (!r.ok) continue;
+      const data = await r.json();
+      const product = (data.products || []).find(x =>
+        x.image_front_small_url || x.image_front_url || x.image_url
+      );
+      const url = product?.image_front_small_url || product?.image_front_url || product?.image_url || '';
+      if (url) return {url,source:'Open Food Facts'};
+    } catch (_) {}
+  }
+
+  // 3) Wikipedia is deliberately last and only accepted for an unambiguous
+  // food/ingredient page. This prevents "Apple" from returning an Apple logo.
   try {
-    const title = encodeURIComponent(clean.replace(/\s+/g,'_'));
+    const wikiQuery = queries[0] || normalizeItemImageText(clean);
+    const title = encodeURIComponent(wikiQuery.replace(/\s+/g,'_'));
     const r = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${title}`, {headers:{'Accept':'application/json'}});
     if (r.ok) {
       const data = await r.json();
+      const context = `${normalizeItemImageText(data?.title || '')} ${normalizeItemImageText(data?.description || '')} ${normalizeItemImageText(data?.extract || '')}`;
+      const hasFoodContext = /fruit|food|ingredient|nut|rice|flour|salt|sugar|milk|vegetable|meat|spice|herb|cheese/.test(context);
       const url = data?.thumbnail?.source || data?.originalimage?.source || '';
-      if (url) return {url,source:'Wikipedia'};
-    }
-  } catch (_) {}
-
-  // 2) Wikimedia Commons search: broader image search for food/product names.
-  try {
-    const q = encodeURIComponent(clean);
-    const r = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${q}&gsrnamespace=6&gsrlimit=8&prop=imageinfo&iiprop=url&iiurlwidth=300&format=json&origin=*`);
-    if (r.ok) {
-      const data = await r.json();
-      const pages = Object.values(data?.query?.pages || {});
-      const page = pages.find(x => {
-        const t = (x.title || '').toLowerCase();
-        return !/logo|icon|map|flag|diagram|screenshot/.test(t) && x.imageinfo?.[0];
-      });
-      const info = page?.imageinfo?.[0];
-      const url = info?.thumburl || info?.url || '';
-      if (url) return {url,source:'Wikimedia Commons'};
-    }
-  } catch (_) {}
-
-  // 3) Open Food Facts: particularly useful for packaged/branded food products.
-  try {
-    const q = encodeURIComponent(clean);
-    const r = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?search_terms=${q}&search_simple=1&action=process&json=1&page_size=8`);
-    if (r.ok) {
-      const data = await r.json();
-      const product = (data.products || []).find(x => x.image_front_small_url || x.image_front_url || x.image_url);
-      const url = product?.image_front_small_url || product?.image_front_url || product?.image_url || '';
-      if (url) return {url,source:'Open Food Facts'};
+      if (url && hasFoodContext) return {url,source:'Wikipedia'};
     }
   } catch (_) {}
 
   return {url:'',source:''};
 }
-
 async function listItems(includeArchived=false) {
   const companyId = currentCompanyId();
   if (!companyId) return [];
