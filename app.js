@@ -3936,7 +3936,10 @@ function renderStockCards(items) {
   if (!grid) return;
   const query = (root.querySelector('#stock-search')?.value || '').trim().toLowerCase();
   const filtered = items.filter(item => !query || (item.name || '').toLowerCase().includes(query));
-  const managerView = membership?.role === 'inventory_manager';
+  const role = normalizedRole(membership?.role);
+  // Inventory Manager, Admin and Transaction Manager all use the same
+  // low-stock-first ordering in the Stock section.
+  const managerView = ['inventory_manager', 'admin', 'transaction_manager'].includes(role);
   const ordered = stockSort(filtered, managerView);
   grid.innerHTML = ordered.length ? ordered.map(item => {
     const q = Number(item.quantity || 0), low = Number(item.lowStockAlert || 0);
