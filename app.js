@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut, onAuthStateChanged
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut as fbSignOut,
+  onAuthStateChanged, reauthenticateWithPopup
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, doc, collection, getDoc, getDocs, setDoc, deleteDoc, updateDoc, serverTimestamp, writeBatch, onSnapshot, runTransaction, query, where, enableMultiTabIndexedDbPersistence
@@ -1361,6 +1362,76 @@ async function rotateCompanyCode() {
   });
   await batch.commit();
   return newCode;
+}
+
+async function reauthenticateAdminForDestructiveAction() {
+  const user = auth.currentUser;
+  if (!user) throw new Error('Your Google account session is not available. Please sign in again.');
+  try {
+    const freshProvider = new GoogleAuthProvider();
+    freshProvider.setCustomParameters({ prompt: 'select_account', login_hint: user.email || '' });
+    await reauthenticateWithPopup(user, freshProvider);
+  } catch (err) {
+    if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+      throw new Error('Google verification was cancelled. The company was not deleted.');
+    }
+    throw new Error('Google account verification failed. The company was not deleted.');
+  }
+}
+
+async function requireDeleteCompanySecurity() {
+  const user = auth.currentUser;
+  const companyId = currentCompanyId();
+  if (!user || !companyId) throw new Error('Your company session is not available.');
+
+  const companySnap = await getDoc(doc(db, 'companies', companyId));
+  if (!companySnap.exists()) throw new Error('Company was not found.');
+  const company = companySnap.data();
+  if (company.ownerUid !== user.uid) throw new Error('Only the original company owner can delete this company.');
+
+  // 1. Fresh Google account verification.
+  await reauthenticateAdminForDestructiveAction();
+
+  // 2. Require enrolled fingerprint/face when this device supports it.
+  if (biometricReadyOnThisDevice() && await platformAuthAvailable()) {
+    try {
+      await verifyWithBiometric();
+    } catch (err) {
+      throw new Error('Fingerprint/face verification failed or was cancelled. The company was not deleted.');
+    }
+  }
+
+  // 3. Always require the personal PIN too. Biometric alone is never enough.
+  if (!storedPinHash()) {
+    throw new Error('Create a personal Inventro PIN before deleting the company.');
+  }
+  await pinModal('delete the company permanently', false);
+
+  // 4. Exact company-name confirmation.
+  const expectedName = String(company.name || '').trim();
+  const typedName = window.prompt(
+    `Final safety check. Type the company name exactly as shown to continue:\n\n${expectedName}`
+  );
+  if (typedName === null || typedName.trim() !== expectedName) {
+    throw new Error('Company name confirmation did not match. The company was not deleted.');
+  }
+
+  // 5. One-time confirmation code.
+  const confirmationCode = String(Math.floor(100000 + Math.random() * 900000));
+  const typedCode = window.prompt(
+    `FINAL CONFIRMATION — this permanently deletes the company and its data.\n\nType this one-time code exactly: ${confirmationCode}`
+  );
+  if (typedCode === null || typedCode.trim() !== confirmationCode) {
+    throw new Error('Final confirmation code did not match. The company was not deleted.');
+  }
+
+  // 6. Deliberate final acknowledgement.
+  if (!window.confirm(
+    'LAST WARNING\n\nThis permanently removes the company, employees, inventory, movements, requests, departments and company code. It cannot be undone.\n\nPress OK only if you are absolutely certain.'
+  )) {
+    throw new Error('Deletion cancelled. No company data was changed.');
+  }
+  return true;
 }
 
 async function deleteCompanyCompletely() {
@@ -4632,10 +4703,28 @@ async function renderAdmin() {
       }
     });
     root.querySelector('#delete-company-admin-btn')?.addEventListener('click', async () => {
-      const ok = confirm('Delete this company permanently? This removes the company, employees, inventory, movements, requests and company code. This cannot be undone.');
-      if (!ok) return;
-      const b = root.querySelector('#delete-company-admin-btn'); b.disabled = true; b.textContent = 'Deleting company…';
-      try { await deleteCompanyCompletely(); clearEmployeeCodeVerification(); await signOut(); } catch (err) { showTemporaryMessage(friendlyError(err), 'error'); b.disabled = false; b.textContent = 'Delete company'; }
+      const b = root.querySelector('#delete-company-admin-btn');
+      if (!b || b.disabled) return;
+
+      const firstWarning = window.confirm(
+        'DANGER ZONE\\n\\nCompany deletion is permanent. You will need Google account verification, fingerprint/face verification when available, your Inventro PIN, the exact company name, a one-time confirmation code and a final confirmation.\\n\\nDo you want to begin the deletion verification process?'
+      );
+      if (!firstWarning) return;
+
+      b.disabled = true;
+      b.textContent = 'Security verification…';
+
+      try {
+        await requireDeleteCompanySecurity();
+        b.textContent = 'Deleting company…';
+        await deleteCompanyCompletely();
+        clearEmployeeCodeVerification();
+        await signOut();
+      } catch (err) {
+        showTemporaryMessage(friendlyError(err), 'error');
+        b.disabled = false;
+        b.textContent = 'Delete company';
+      }
     });
 
     root.querySelectorAll('[data-admin-tab]').forEach((btn) => btn.addEventListener('click', () => draw(btn.dataset.adminTab)));
