@@ -1,16 +1,60 @@
-const CACHE = 'inventro-shell-v101';
-const CORE = ['./','./index.html','./style.css?v=101','./app.js?v=101','./manifest.json'];
+const CACHE = 'inventro-shell-v102';
+const CORE = [
+  './',
+  './index.html',
+  './style.css?v=102',
+  './app.js?v=100',
+  './manifest.json'
+];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(CACHE)
+      .then(cache => cache.addAll(CORE))
+      .then(() => self.skipWaiting())
+  );
 });
+
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  event.waitUntil(
+    caches.keys()
+      .then(keys =>
+        Promise.all(
+          keys
+            .filter(k => k !== CACHE)
+            .map(k => caches.delete(k))
+        )
+      )
+      .then(() => self.clients.claim())
+  );
 });
+
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== location.origin) return;
-  event.respondWith(fetch(event.request).then(response => {
-    const copy=response.clone(); caches.open(CACHE).then(cache=>cache.put(event.request,copy)); return response;
-  }).catch(() => caches.match(event.request).then(r => r || caches.match('./index.html'))));
+
+  if (
+    event.request.method !== 'GET' ||
+    url.origin !== location.origin
+  ) {
+    return;
+  }
+
+  event.respondWith(
+    fetch(event.request)
+      .then(response => {
+        const copy = response.clone();
+
+        caches.open(CACHE).then(cache => {
+          cache.put(event.request, copy);
+        });
+
+        return response;
+      })
+      .catch(() =>
+        caches.match(event.request)
+          .then(response =>
+            response || caches.match('./index.html')
+          )
+      )
+  );
 });
