@@ -1,10 +1,10 @@
-const CACHE = 'inventro-shell-v109';
+const CACHE = 'inventro-shell-v110';
 
 const CORE = [
   './',
   './index.html',
   './style.css?v=104',
-  './app.js?v=104',
+  './app.js?v=105',
   './manifest.json'
 ];
 
