@@ -1586,6 +1586,16 @@ const BN = {
   'Opening balance':'ওপেনিং ব্যালেন্স',
   'Received':'গ্রহণ',
   'Spent':'খরচ',
+  'View transactions':'ট্রানজ্যাকশন দেখুন',
+  'Cash Transactions':'ক্যাশ ট্রানজ্যাকশন',
+  'Filter transactions':'ট্রানজ্যাকশন ফিল্টার করুন',
+  'All transaction types':'সব ট্রানজ্যাকশন',
+  'Received only':'শুধু গ্রহণ',
+  'Spent only':'শুধু খরচ',
+  'All departments':'সব ডিপার্টমেন্ট',
+  'Download Excel':'Excel ডাউনলোড করুন',
+  'No matching cash transactions':'মিল থাকা কোনো ক্যাশ ট্রানজ্যাকশন নেই',
+  'Back to Cash':'ক্যাশে ফিরে যান',
   'View Changes':'পরিবর্তন দেখুন',
   'Edit':'এডিট',
   'Cash activity':'ক্যাশ কার্যকলাপ',
@@ -1924,7 +1934,7 @@ Object.assign(BN, {
   '🔵 Ordered':'🔵 অর্ডার করা',
   '📄 Create & share order':'📄 অর্ডার তৈরি ও শেয়ার করুন',
   'Live inventory':'লাইভ ইনভেন্টরি',
-  '📊 Share current stock CSV':'📊 বর্তমান স্টক CSV শেয়ার করুন',
+  '📊 Share current stock Excel':'📊 বর্তমান স্টক Excel শেয়ার করুন',
   'Last reorder report sent:':'শেষ রিঅর্ডার রিপোর্ট পাঠানো হয়েছে:',
   'Stock movement':'স্টক মুভমেন্ট',
   'Department receiving stock':'স্টক গ্রহণকারী ডিপার্টমেন্ট',
@@ -2015,7 +2025,7 @@ Object.assign(BN, {
   'All transaction activity':'সব ট্রানজ্যাকশন কার্যকলাপ',
   'Received items':'গৃহীত আইটেম',
   'Dispatched items':'ডিসপ্যাচ করা আইটেম',
-  '📊 Download / Share CSV':'📊 CSV ডাউনলোড / শেয়ার করুন',
+  '📊 Download / Share Excel':'📊 Excel ডাউনলোড / শেয়ার করুন',
   'Receive transactions':'রিসিভ ট্রানজ্যাকশন',
   'Dispatch transactions':'ডিসপ্যাচ ট্রানজ্যাকশন',
   'Received quantity':'গৃহীত পরিমাণ',
@@ -2362,14 +2372,62 @@ function maybeNotifyStockState(items){
  * continue to re-render without creating history entries.
  */
 let historyNavigationReady = false;
+
+// Full-screen navigation feedback. This is intentionally more visible than a
+// normal page-enter animation: it behaves like a short, polished app loading
+// screen so users can immediately tell that their tap changed the workspace.
+let inventroLoadingTimer = null;
+// Minimal navigation feedback: a short top progress line, similar to polished
+// production dashboards. It confirms the tap without blocking the interface.
+function showNavigationLoader(label = 'Loading workspace') {
+  clearTimeout(inventroLoadingTimer);
+  let bar = document.getElementById('inventro-navigation-loader');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'inventro-navigation-loader';
+    bar.className = 'inventro-navigation-loader';
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', label);
+    bar.innerHTML = '<span></span>';
+    document.body.appendChild(bar);
+  } else {
+    bar.setAttribute('aria-label', label);
+  }
+  bar.classList.remove('is-visible','is-leaving');
+  void bar.offsetWidth;
+  bar.classList.add('is-visible');
+}
+function hideNavigationLoader(delay = 280) {
+  clearTimeout(inventroLoadingTimer);
+  inventroLoadingTimer = setTimeout(() => {
+    const bar = document.getElementById('inventro-navigation-loader');
+    if (!bar) return;
+    bar.classList.remove('is-visible');
+    bar.classList.add('is-leaving');
+    setTimeout(() => bar.remove(), 220);
+  }, delay);
+}
+function animateRenderedPage() {
+  requestAnimationFrame(() => {
+    const page = root.firstElementChild;
+    if (page) {
+      page.classList.remove('inventro-page-enter');
+      void page.offsetWidth;
+      page.classList.add('inventro-page-enter');
+    }
+  });
+}
 function navigate(nextView, { replace = false } = {}) {
   if (view === nextView) { render(); return; }
   if (nextView === 'admin') adminActiveTab = null;
+  showNavigationLoader(nextView === 'cash-transactions' || nextView === 'cash-admin' ? 'Opening cash ledger' : 'Loading workspace');
   view = nextView;
   const state = { inventro: true, view: nextView };
   if (replace || !historyNavigationReady) history.replaceState(state, '', location.href);
   else history.pushState(state, '', location.href);
   render();
+  animateRenderedPage();
+  hideNavigationLoader(520);
 }
 
 function navigateBack(fallback = 'home') {
@@ -2404,6 +2462,7 @@ window.addEventListener('popstate', (event) => {
   // Keep Android/browser Back inside the SPA. The initial document entry must
   // never resolve to Inventro's internal loading screen.
   if (event.state?.inventro && event.state.view) {
+    showNavigationLoader(event.state.view === 'home' ? 'Returning to workspace' : 'Loading workspace');
     view = event.state.view;
     adminActiveTab = view === 'admin' ? (event.state.adminTab || null) : null;
     if (view === 'history' && membership?.role === 'admin' && event.state.historyRole) {
@@ -2413,6 +2472,8 @@ window.addEventListener('popstate', (event) => {
     } else {
       render();
     }
+    animateRenderedPage();
+    hideNavigationLoader(520);
     return;
   }
   view = auth.currentUser ? (membership ? 'home' : 'welcome') : 'welcome';
@@ -3322,14 +3383,14 @@ function getRealtimeMovementRows() {
 }
 
 function buildTransactionManagerDailyCsvFile(day, rows, items, activity='all', department='all') {
-  if (membership?.role !== 'transaction_manager') throw new Error('Only the Transaction Manager can access the daily transaction CSV.');
+  if (membership?.role !== 'transaction_manager') throw new Error('Only the Transaction Manager can access the daily transaction Excel report.');
   const report = buildTransactionManagerDailyReport(rows, day, {activity, department, items});
   const selected = report.todayRows.slice().sort((a,b)=>{ const t=(a.createdAt?.toMillis?.()||0)-(b.createdAt?.toMillis?.()||0); if(t) return t; return String(a.itemName||'').localeCompare(String(b.itemName||''),undefined,{sensitivity:'base'}); });
   if(!selected.length) throw new Error(`No matching Inventory Manager transactions were recorded on ${day}.`);
   const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;
   const movementFilter=activity==='receive'?'Received':activity==='dispatch'?'Dispatched':'All movements';
   const departmentFilter=department==='all'?'All departments':department;
-  const lines=[['Inventro Transaction Manager Daily CSV'],['Date',day],['Movement filter',movementFilter],['Department filter',departmentFilter],['Generated',formatDate(new Date())],[],['Item Name','Movement','Department','Quantity','Unit','Time','Person ID','Role','Requested By','Request ID','Note','Status'],...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit||'',formatDate(r.createdAt),r.byEmail?shortPersonId(r.byEmail,r.byRole||r.actorRole||''):'',roleLabel(r.byRole||r.actorRole||''),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL'])].map(row=>row.map(esc).join(','));
+  const lines=[['Inventro Transaction Manager Daily Excel Report'],['Date',day],['Movement filter',movementFilter],['Department filter',departmentFilter],['Generated',formatDate(new Date())],[],['Item Name','Movement','Department','Quantity','Unit','Time','Person ID','Role','Requested By','Request ID','Note','Status'],...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit||'',formatDate(r.createdAt),r.byEmail?shortPersonId(r.byEmail,r.byRole||r.actorRole||''):'',roleLabel(r.byRole||r.actorRole||''),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL'])].map(row=>row.map(esc).join(','));
   return new File([lines.join('\r\n')],`Inventro-TM-Daily-${day}.csv`,{type:'text/csv;charset=utf-8'});
 }
 async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareCsvFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`); }
@@ -3563,7 +3624,7 @@ async function renderCashPage() {
   let departments=[], error='';
   try{departments=await listCashDepartments();}catch(err){error=friendlyError(err);}
   root.innerHTML=`<div class="dashboard feature-page cash-page"><div class="topbar"><button class="back-btn" id="cash-back">‹ Back</button><div class="topbar-brand">Inventro</div></div>
-    <section class="feature-header"><p class="eyebrow">Secure cash ledger</p><h1>Cash</h1><p>Record cash received and cash outflow by cash department. Today is open; completed days are locked.</p></section>
+    <section class="feature-header"><p class="eyebrow">Secure cash ledger</p><div class="cash-title-row"><h1>Cash</h1><button type="button" class="cash-view-transactions-btn" id="cash-view-transactions">📋 View transactions</button></div><p>Record cash received and cash outflow by cash department. Today is open; completed days are locked.</p></section>
     <section class="cash-balance-card" id="cash-balance-card"></section>
     <section class="admin-card cash-entry-card">
       <div class="admin-card-title"><div><h2>Record cash transaction</h2><p>Every save requires ${isMobileDevice()?'fingerprint/face or PIN':'your personal PIN'} verification.</p></div></div>
@@ -3578,7 +3639,6 @@ async function renderCashPage() {
       <button class="btn btn-primary" id="cash-save" ${departments.length?'':'disabled'}>🔐 Record transaction</button>
       ${departments.length?'':'<div class="cash-empty-departments"><strong>No cash departments configured.</strong><span>Ask the Admin to add a cash department in Admin Center → Departments → Cash.</span></div>'}
     </section>
-    <section class="admin-card"><div class="admin-card-title"><div><h2>Transactions</h2><p id="cash-list-subtitle">Today’s cash transactions</p></div></div><div id="cash-transaction-list" class="cash-transaction-list"></div></section>
   </div>`;
   const dayInput=root.querySelector('#cash-day');
   const refresh=async()=>{
@@ -3596,6 +3656,7 @@ async function renderCashPage() {
   window._inventroCashRefresh=refresh;
   dayInput.addEventListener('change',refresh);
   root.querySelector('#cash-back').addEventListener('click',()=>navigateBack('home'));
+  root.querySelector('#cash-view-transactions').addEventListener('click',()=>navigate('cash-transactions'));
   root.querySelector('#cash-save').addEventListener('click',async()=>{
     const b=root.querySelector('#cash-save'); b.disabled=true; b.textContent='Checking security…';
     try{
@@ -3668,25 +3729,84 @@ async function renderAdminCashHomeMonitor(){
   homeCashMonitorCleanup=()=>unsub();
   await load();
 }
-async function renderCashAdminPage(){
-  if(membership?.role!=='admin'){navigate('home');return;}
-  stopHomeCashMonitor();
+
+function buildCashExcelFile(day, rows, typeFilter='all', department='all') {
+  const typeLabel = typeFilter==='received' ? 'Received' : typeFilter==='outflow' ? 'Spent' : 'All transaction types';
+  const departmentLabel = department==='all' ? 'All departments' : department;
+  const esc = value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const selected = cashRowsSort(rows).filter(r =>
+    (typeFilter==='all' || String(r.type||'')===typeFilter) &&
+    (department==='all' || String(r.department||'')===department)
+  );
+  const body = selected.map(r => `<tr><td>${esc(r.dateKey||day)}</td><td>${esc(r.type==='outflow'?'Spent':'Received')}</td><td>${esc(cashAmountText(r))}</td><td>${esc(r.department||'')}</td><td>${esc(shortDisplayName(r.byEmail,r.byName))}</td><td>${esc(roleLabel(r.byRole||''))}</td><td>${esc(r.note||'')}</td><td>${esc(formatDate(r.createdAt))}</td><td>${r.editedAt?'EDITED':'ORIGINAL'}</td></tr>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:6px;text-align:left}th{font-weight:bold}.meta{margin-bottom:12px}</style></head><body><h2>Inventro Cash Transactions</h2><div class="meta"><b>Date:</b> ${esc(day)} &nbsp; <b>Transaction:</b> ${esc(typeLabel)} &nbsp; <b>Department:</b> ${esc(departmentLabel)}</div><table><thead><tr><th>Date</th><th>Transaction</th><th>Amount</th><th>Department</th><th>Person</th><th>Role</th><th>Note</th><th>Time</th><th>Status</th></tr></thead><tbody>${body}</tbody></table></body></html>`;
+  return {file:new File([html],`Inventro-Cash-${day}.xls`,{type:'application/vnd.ms-excel'}), count:selected.length};
+}
+function downloadCashExcel(day, rows, typeFilter='all', department='all') {
+  const {file,count}=buildCashExcelFile(day,rows,typeFilter,department);
+  if(!count) throw new Error('No matching cash transactions for the selected filters.');
+  const url=URL.createObjectURL(file); const a=document.createElement('a'); a.href=url; a.download=file.name; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); return count;
+}
+
+async function renderCashTransactionsPage({admin=false}={}) {
+  const allowed = admin ? membership?.role==='admin' : isCashRole();
+  if(!allowed){navigate('home');return;}
   const today=localDateKey();
-  root.innerHTML=`<div class="dashboard feature-page cash-page cash-admin-page"><div class="topbar"><button class="back-btn" id="cash-admin-back">‹ Back</button><div class="topbar-brand">Inventro</div></div><section class="feature-header"><p class="eyebrow">Administration · Cash</p><h1>Cash Monitor</h1><p>Company-wide cash ledger. Today updates in real time; older dates are loaded on demand.</p></section><section class="cash-balance-card" id="cash-admin-balance"></section><section class="admin-card"><div class="history-tools"><div><label for="cash-admin-day">Date</label><input id="cash-admin-day" type="date" value="${today}" max="${today}"></div></div><div id="cash-admin-list" class="cash-transaction-list"></div></section></div>`;
-  const dayInput=root.querySelector('#cash-admin-day');
+  let departments=[];
+  try{departments=await listCashDepartments();}catch(err){showTemporaryMessage(friendlyError(err),'error');}
+  root.innerHTML=`<div class="dashboard feature-page cash-page cash-transactions-page"><div class="topbar"><button class="back-btn" id="cash-transactions-back">‹ Back</button><div class="topbar-brand">Inventro</div></div>
+    <section class="feature-header"><p class="eyebrow">${admin?'Administration · Cash':'Cash ledger'}</p><h1>Cash Transactions</h1><p>Filter the selected day's records by department and transaction type, then download the filtered details as an Excel file.</p></section>
+    <section class="admin-card cash-filter-card"><div class="admin-card-title"><div><h2>Filter transactions</h2><p>Select a date and filters to view exactly the records you need.</p></div></div><div class="cash-filter-grid"><div class="field"><label for="cash-tx-day">Date</label><input id="cash-tx-day" type="date" value="${today}" max="${today}"></div><div class="field"><label for="cash-tx-type">Transaction</label><select id="cash-tx-type"><option value="all">All transaction types</option><option value="received">Received only</option><option value="outflow">Spent only</option></select></div><div class="field"><label for="cash-tx-department">Department</label><select id="cash-tx-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="cash-filter-action"><button type="button" class="btn btn-primary" id="cash-tx-excel">📊 Download Excel</button></div></div></section>
+    <section class="cash-balance-card" id="cash-tx-balance"></section>
+    <section class="admin-card"><div class="admin-card-title"><div><h2>Transactions</h2><p id="cash-tx-subtitle"></p></div></div><div id="cash-tx-list" class="cash-transaction-list"></div></section></div>`;
+  const dayInput=root.querySelector('#cash-tx-day'), typeInput=root.querySelector('#cash-tx-type'), depInput=root.querySelector('#cash-tx-department');
   const load=async()=>{
-    const day=dayInput.value||today;
+    let day=dayInput.value||today; if(day>today){day=today;dayInput.value=today;}
     const [rows,opening]=await Promise.all([getCashRowsForDay(day),getCashBalanceBeforeDay(day)]);
-    const summary=cashSummary(rows,opening);
-    root.querySelector('#cash-admin-balance').innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(day)}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Closing balance</small></div><div class="cash-balance-status">${day===today?'LIVE':'ON CALL'}</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
-    root.querySelector('#cash-admin-list').innerHTML=rows.length?rows.map(r=>cashTransactionRowHtml(r,{canEdit:false})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(day)}.</strong><span>No cash activity was recorded on this date.</span></div>`;
+    const typeFilter=typeInput.value||'all', department=depInput.value||'all';
+    const filtered=rows.filter(r=>(typeFilter==='all'||r.type===typeFilter)&&(department==='all'||r.department===department));
+    const summary=cashSummary(filtered,opening);
+    root.querySelector('#cash-tx-balance').innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(day)}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Filtered closing balance</small></div><div class="cash-balance-status">${filtered.length} RECORDS</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
+    root.querySelector('#cash-tx-subtitle').textContent=`${filtered.length} transaction${filtered.length===1?'':'s'} · ${typeFilter==='received'?'Received only':typeFilter==='outflow'?'Spent only':'All transaction types'} · ${department==='all'?'All departments':department}`;
+    root.querySelector('#cash-tx-list').innerHTML=filtered.length?filtered.map(r=>cashTransactionRowHtml(r,{canEdit:!admin&&isCashEditRole()})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No matching cash transactions.</strong><span>Try another date or filter.</span></div>`;
+    // Keep filter changes stable: no vertical movement, scaling, or bounce.
+    // CSS handles a subtle opacity-only refresh for the updated results.
+    ['#cash-tx-balance','#cash-tx-list'].forEach(sel=>{
+      const el=root.querySelector(sel);
+      if(el){
+        el.classList.remove('cash-live-update');
+        void el.offsetWidth;
+        el.classList.add('cash-live-update');
+      }
+    });
+    root.querySelectorAll('[data-cash-edit]').forEach(btn=>btn.addEventListener('click',async()=>{
+      const row=filtered.find(r=>r.id===btn.dataset.cashEdit); if(!row)return; const isPast=row.dateKey!==today;
+      const open=async()=>openCashEditModal(row,await listCashDepartments(),async(values,modal)=>{const save=modal.querySelector('#cash-edit-save');save.disabled=true;save.textContent='Saving…';try{await updateCashTransaction(row.id,values,true);closeCashEditModal();showTemporaryMessage('Cash transaction updated and balances recalculated.','success');await load();}catch(err){showTemporaryMessage(friendlyError(err),'error');save.disabled=false;save.textContent='Save changes';}});
+      if(isPast) showCashPastEditWarning(row,open); else {try{await requirePin('edit today’s cash transaction');await open();}catch(err){showTemporaryMessage(friendlyError(err),'error');}}
+    }));
+    root.querySelectorAll('[data-cash-changes]').forEach(btn=>{const row=filtered.find(r=>r.id===btn.dataset.cashChanges);if(row)btn.addEventListener('click',()=>showCashChanges(row));});
+    return rows;
   };
-  dayInput.addEventListener('change',load);
-  root.querySelector('#cash-admin-back').addEventListener('click',()=>navigateBack('home'));
-  const unsub=onSnapshot(query(collection(db,'companies',currentCompanyId(),'cashTransactions'),where('dateKey','==',today)),()=>{if(dayInput.value===today)load();},err=>console.warn('Admin cash listener:',err));
+  // Filters are an in-place data update, not navigation. Do not show the
+  // navigation loader here; that made the controls feel like they were
+  // bouncing/jumping between screens.
+  const filterWithLoading = () => {
+    // Keep the filter itself still; only show the slim blue progress line at the top.
+    showNavigationLoader('Updating cash records');
+    Promise.resolve(load()).finally(() => hideNavigationLoader(380));
+  };
+  dayInput.addEventListener('change',filterWithLoading);
+  typeInput.addEventListener('change',filterWithLoading);
+  depInput.addEventListener('change',filterWithLoading);
+  root.querySelector('#cash-transactions-back').addEventListener('click',()=>navigateBack(admin?'home':'cash'));
+  root.querySelector('#cash-tx-excel').addEventListener('click',async()=>{const b=root.querySelector('#cash-tx-excel');b.disabled=true;b.textContent='Preparing Excel…';try{const rows=await load();const count=downloadCashExcel(dayInput.value||today,rows,typeInput.value||'all',depInput.value||'all');showTemporaryMessage(`${count} cash transaction${count===1?'':'s'} exported to Excel.`,'success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📊 Download Excel';}});
+  const companyId=currentCompanyId();
+  const unsub=onSnapshot(query(collection(db,'companies',companyId,'cashTransactions'),where('dateKey','==',today)),()=>{if(dayInput.value===today)load();},err=>console.warn('Cash transaction page listener:',err));
   cashPageUnsubscribe=unsub;
   await load();
 }
+
+async function renderCashAdminPage(){ return renderCashTransactionsPage({admin:true}); }
 
 function renderHome(membership) {
   if (!pinUnlocked()) { showPinGate(); return; }
@@ -3882,7 +4002,7 @@ async function shareCsvFile(file, text) {
     return await shareFile(file, text);
   } catch (err) {
     if (err?.name === 'AbortError') throw err;
-    console.warn('CSV file sharing unavailable; downloading instead.', err);
+    console.warn('Excel sharing unavailable; downloading instead.', err);
     return downloadCsvFile(file);
   }
 }
@@ -4009,7 +4129,7 @@ function stockReportSelectionHtml(items){
 }
 
 async function shareCurrentStockCsv(itemsOverride=null){
-  if(membership?.role!=='inventory_manager') throw new Error('Only Inventory Manager can share the stock CSV.');
+  if(membership?.role!=='inventory_manager') throw new Error('Only Inventory Manager can share the stock Excel report.');
   const items=Array.isArray(itemsOverride)?itemsOverride:await listItems(); const rows=currentStockRows(items); if(!rows.length) throw new Error('There are no stock items to share.');
   const escapeCsv=value=>`"${String(value??'').replaceAll('"','""')}"`;
   const lines=[['Item Name','Current Quantity','Unit','Low Stock Limit','Status','Last Updated'].map(escapeCsv).join(','),...rows.map(r=>[r.name,r.quantity,r.unit,r.low,stockState(r.quantity,r.low),r.updated].map(escapeCsv).join(','))];
@@ -4032,11 +4152,11 @@ async function renderStock(){
   const lastReport=manager?localStorage.getItem(`inventroLastStockReport:${currentCompanyId()}`):null;
   root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="stock-back">‹ Back</button><div class="topbar-brand">Inventro</div></div>
     <section class="feature-header"><p class="eyebrow">Live inventory</p><h1>Stock</h1></section>
-    ${manager?`<section class="inventory-tools"><div class="stock-search-wrap"><span>⌕</span><input id="stock-search" type="search" placeholder="Search stock by item name…" autocomplete="off"></div><div class="inventory-share-actions"><button class="small-action csv-btn" id="share-stock-csv" type="button">📊 Share current stock CSV</button></div></section>${lastReport?`<div class="report-history-note">Last reorder report sent: <strong>${escapeHtml(formatDate(lastReport))}</strong>. New red/yellow items after that time are not part of that old snapshot.</div>`:''}${stockReportSelectionHtml(items)}`:`<section class="inventory-tools"><div class="stock-search-wrap"><span>⌕</span><input id="stock-search" type="search" placeholder="Search stock by item name…" autocomplete="off"></div></section>`}
+    ${manager?`<section class="inventory-tools"><div class="stock-search-wrap"><span>⌕</span><input id="stock-search" type="search" placeholder="Search stock by item name…" autocomplete="off"></div><div class="inventory-share-actions"><button class="small-action csv-btn" id="share-stock-csv" type="button">📊 Share current stock Excel</button></div></section>${lastReport?`<div class="report-history-note">Last reorder report sent: <strong>${escapeHtml(formatDate(lastReport))}</strong>. New red/yellow items after that time are not part of that old snapshot.</div>`:''}${stockReportSelectionHtml(items)}`:`<section class="inventory-tools"><div class="stock-search-wrap"><span>⌕</span><input id="stock-search" type="search" placeholder="Search stock by item name…" autocomplete="off"></div></section>`}
     ${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}<div id="stock-grid" class="stock-grid"></div></div>`;
   renderStockCards(items);
   root.querySelector('#stock-back').addEventListener('click',()=>{stopStockListener();navigateBack('home');});root.querySelector('#stock-search').addEventListener('input',()=>renderStockCards(items));
-  root.querySelector('#share-stock-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#share-stock-csv');b.disabled=true;b.textContent='Preparing CSV…';try{const mode=await shareCurrentStockCsv(items);showTemporaryMessage(mode==='shared'?'Current stock CSV ready to share.':'Current stock CSV downloaded.','success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📊 Share current stock CSV';}});
+  root.querySelector('#share-stock-csv')?.addEventListener('click',async()=>{const b=root.querySelector('#share-stock-csv');b.disabled=true;b.textContent='Preparing Excel…';try{const mode=await shareCurrentStockCsv(items);showTemporaryMessage(mode==='shared'?'Current stock Excel ready to share.':'Current stock Excel downloaded.','success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📊 Share current stock Excel';}});
   root.querySelector('#share-selected-low-pdf')?.addEventListener('click',async()=>{const b=root.querySelector('#share-selected-low-pdf');b.disabled=true;b.textContent='Preparing report…';try{const yellowIds=[...root.querySelectorAll('.yellow-report-check:checked')].map(x=>x.value);const resendIds=[...root.querySelectorAll('.resend-report-check:checked')].map(x=>x.value);const result=await shareLowStockPdf({yellowIds,resendIds});showTemporaryMessage(result.mode==='shared'?`Supplier order ${result.orderId} ready to share.`:`Supplier order ${result.orderId} downloaded.`,'success');}catch(err){showTemporaryMessage(friendlyError(err),'error');}finally{b.disabled=false;b.textContent='📄 Generate & share report';}});
   const companyId=currentCompanyId(); if(companyId){stockUnsubscribe=onSnapshot(collection(db,'companies',companyId,'items'),snap=>{const live=snap.docs.map(d=>({id:d.id,...d.data()}));renderStockCards(live);maybeNotifyStockState(live);},err=>showTemporaryMessage(friendlyError(err),'error'));}
 }
@@ -4544,8 +4664,11 @@ function openRevisionPage(itemId,movementId){
   const state={inventro:true,view:'revision',revisionTarget:`${itemId}:${movementId}`,
     returnHistoryRole:history.state?.historyRole||null};
   history.pushState(state,'',url);
+  showNavigationLoader('Loading transaction details');
   view='revision';
   render();
+  animateRenderedPage();
+  hideNavigationLoader(520);
   return true;
 }
 
@@ -4745,7 +4868,7 @@ async function renderHistory(forcedRole=null){
     <section class="feature-header"><p class="eyebrow">Daily log book</p><h1>${adminMenuOnly?'History':adminTmMenuOnly?'History · Transaction Manager':'History · '+escapeHtml(roleLabel(selectedRole))}</h1></section>
     ${adminMenuOnly?`<section class="history-admin-menu" id="history-admin-menu"><button class="history-account-card" data-history-role="inventory_manager" type="button"><span>📦</span><strong>Inventory Manager</strong><small>Receiving, dispatch & request fulfilment</small></button><button class="history-account-card" data-history-role="stock_requester" type="button"><span>📝</span><strong>Stock Requisitioner</strong><small>Requests, approvals & dispatched fulfilments</small></button><button class="history-account-card" data-history-role="transaction_manager" type="button"><span>🧾</span><strong>Transaction Manager</strong><small>Transaction control & daily statements</small></button></section>`:adminTmMenuOnly?`<section class="history-admin-menu tm-history-submenu" id="tm-history-submenu"><button class="history-account-card" data-tm-history-action="order-list" type="button"><span>🛒</span><strong>Supplier Order Lists</strong><small>View what the Transaction Manager prepared for each day.</small></button><button class="history-account-card" data-tm-history-action="live-report" type="button"><span>⚡</span><strong>Live Daily Report</strong><small>View Inventory Manager receiving and dispatch activity.</small></button></section>`:`<section class="history-workspace" id="history-workspace">
       ${isAdmin?`<div class="history-workspace-bar"><button type="button" class="back-btn" id="history-menu-back">‹ History</button><strong id="history-workspace-title">${escapeHtml(roleLabel(selectedRole))} History</strong></div>`:''}
-      <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><button class="small-action csv-btn" id="history-export-csv" type="button">📊 Download / Share CSV</button></section>
+      <section class="history-tools"><div><label for="history-day">Date</label><input id="history-day" type="date" value="${today}"></div><div><label for="history-type">Activity</label><select id="history-type"></select></div><div><label for="history-department">Department</label><select id="history-department"><option value="all">All departments</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><button class="small-action csv-btn" id="history-export-csv" type="button">📊 Download / Share Excel</button></section>
       ${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${selectedRole==='transaction_manager'?`<section class="admin-card tm-live-panel" id="history-live-panel"><div id="tm-live-report"></div></section>`:`<section class="admin-card" id="history-daily-panel"><div id="daily-statement" class="daily-statement" hidden></div><div id="history-list" class="history-list"></div></section>`}
     </section>`}</div>`;
 
@@ -4867,17 +4990,17 @@ async function renderHistory(forcedRole=null){
   
   root.querySelector('#history-export-csv')?.addEventListener('click',async()=>{
     const b=root.querySelector('#history-export-csv');
-    b.disabled=true; b.textContent='Preparing CSV…';
+    b.disabled=true; b.textContent='Preparing Excel…';
     try{
       const selectedDay=root.querySelector('#history-day')?.value||today;
       const selectedActivity=root.querySelector('#history-type')?.value||'all';
       const selectedDepartment=root.querySelector('#history-department')?.value||'all';
       const mode=await exportHistoryCsv(selectedDay,exportRows,selectedRole,selectedActivity,selectedDepartment);
-      showTemporaryMessage(mode==='shared'?'CSV ready to share.':'CSV downloaded.','success');
+      showTemporaryMessage(mode==='shared'?'Excel ready to share.':'Excel downloaded.','success');
     }catch(err){
       if(err?.name!=='AbortError') showTemporaryMessage(friendlyError(err),'error');
     }finally{
-      b.disabled=false; b.textContent='📊 Download / Share CSV';
+      b.disabled=false; b.textContent='📊 Download / Share Excel';
     }
   });
   if(selectedRole) refreshList();
@@ -5078,7 +5201,10 @@ async function renderAdmin() {
       root.querySelectorAll('[data-admin-tab]').forEach(btn=>btn.addEventListener('click',()=>{
         const tab = btn.dataset.adminTab;
         history.pushState({ inventro: true, view: 'admin', adminTab: tab }, '', location.href);
+        showNavigationLoader('Opening Admin section');
         draw(tab);
+        animateRenderedPage();
+        hideNavigationLoader(520);
       }));
       return;
     }
@@ -5406,7 +5532,7 @@ let view = 'loading', membership = null, justCreatedCode = null, returnToJoinAft
 
 function render() {
   startLanguageSystem();
-  if(view!=='cash') cashAccessGranted = false;
+  if(!['cash','cash-transactions'].includes(view)) cashAccessGranted = false;
   if(view!=='home') stopHomeCashMonitor();
   if(!['cash','cash-admin'].includes(view) && cashPageUnsubscribe){cashPageUnsubscribe();cashPageUnsubscribe=null;}
   if (auth.currentUser && membership && isMobileDevice() && !['welcome','loading','employeeCode'].includes(view) && !pinUnlocked()) { showPinGate(); return; }
@@ -5451,6 +5577,9 @@ function render() {
       break;
     case 'cash':
       renderCashPage();
+      break;
+    case 'cash-transactions':
+      renderCashTransactionsPage({admin:false});
       break;
     case 'cash-admin':
       renderCashAdminPage();
