@@ -1,10 +1,10 @@
-const CACHE = 'inventro-shell-v114-cash-motion';
+const CACHE = 'inventro-shell-v115-page-slide';
 
 const CORE = [
   './',
   './index.html',
-  './style.css?v=108',
-  './app.js?v=108',
+  './style.css?v=109',
+  './app.js?v=109',
   './manifest.json'
 ];
 
