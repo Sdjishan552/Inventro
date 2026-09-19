@@ -3,10 +3,10 @@
    ========================================================= */
 
 :root {
-  --bg: #f4f7fb;
+  --bg: #f1f5fb;
   --surface: #ffffff;
-  --surface-soft: #f8fafc;
-  --surface-blue: #eef6ff;
+  --surface-soft: #f5f8fc;
+  --surface-blue: #edf5ff;
 
   --text: #172033;
   --text-soft: #5f6b7a;
@@ -14,7 +14,7 @@
 
   --primary: #2563eb;
   --primary-dark: #1d4ed8;
-  --primary-soft: #eaf2ff;
+  --primary-soft: #e8f1ff;
 
   --green: #16a34a;
   --green-soft: #eaf8ef;
@@ -2945,15 +2945,58 @@ label {
 /* =========================================================
    SMOOTH PROFESSIONAL MOTION
    ========================================================= */
-/* Screen navigation: soft fade + tiny settle. No blur, scale, or bounce. */
+/* Screen navigation: a quick, clearly visible horizontal slide. */
 .inventro-page-enter{
-  animation:inventroPageEnter .28s cubic-bezier(.22,.8,.2,1) both;
+  animation:inventroPageEnter .38s cubic-bezier(.22,.75,.2,1) both;
   will-change:opacity,transform;
 }
 @keyframes inventroPageEnter{
-  0%{opacity:0;transform:translate3d(0,4px,0)}
+  0%{opacity:0;transform:translate3d(22px,0,0)}
+  65%{opacity:1;transform:translate3d(-2px,0,0)}
   100%{opacity:1;transform:translate3d(0,0,0)}
 }
+
+/* A thin top progress line makes navigation unmistakable without blocking the UI. */
+.inventro-navigation-loader{
+  position:fixed;
+  top:0;
+  left:0;
+  right:0;
+  height:3px;
+  z-index:99999;
+  overflow:hidden;
+  pointer-events:none;
+  opacity:0;
+  background:rgba(37,99,235,.10);
+  transition:opacity .12s ease;
+}
+.inventro-navigation-loader.is-visible{opacity:1}
+.inventro-navigation-loader span{
+  display:block;
+  width:38%;
+  height:100%;
+  border-radius:999px;
+  background:linear-gradient(90deg,transparent,var(--primary),#38bdf8,transparent);
+  transform:translateX(-130%);
+}
+.inventro-navigation-loader.is-visible span{animation:inventroNavigationProgress .62s cubic-bezier(.2,.7,.2,1) forwards}
+.inventro-navigation-loader.is-leaving{opacity:0;transition:opacity .18s ease}
+@keyframes inventroNavigationProgress{
+  0%{transform:translateX(-130%)}
+  100%{transform:translateX(360%)}
+}
+
+/* Very light colour wash: keeps the app bright, but removes the sterile all-white feel. */
+body{
+  background:
+    radial-gradient(circle at 8% 0%,rgba(59,130,246,.055),transparent 28%),
+    radial-gradient(circle at 96% 18%,rgba(139,92,246,.045),transparent 25%),
+    var(--bg);
+}
+.quick-card,.admin-card,.user-pill,.signout-small{
+  background:linear-gradient(180deg,#ffffff 0%,#fbfdff 100%);
+}
+
 
 /* Cash workspace panels enter gently when the workspace itself opens. */
 .cash-transactions-page .cash-filter-card,
@@ -3001,6 +3044,7 @@ label {
 
 @media(prefers-reduced-motion:reduce){
   .inventro-page-enter,
+  .inventro-navigation-loader,
   .cash-transactions-page .cash-filter-card,
   .cash-transactions-page .admin-card:not(.cash-filter-card),
   .cash-live-update{animation:none!important}
