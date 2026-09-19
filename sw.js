@@ -1,4 +1,4 @@
-const CACHE = 'inventro-shell-v106';
+const CACHE = 'inventro-shell-v107';
 
 const CORE = [
   './',
