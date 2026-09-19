@@ -2346,8 +2346,12 @@ async function enableLowStockNotifications(){
 }
 
 function maybeNotifyStockState(items){
-  if(membership?.role !== 'inventory_manager') return;
-  if(!('Notification' in window)||Notification.permission!=='granted') return;
+  // Keep the same live low-stock alert behavior for both Inventory Manager
+  // and Admin stock screens. The in-app toast works even when browser
+  // notification permission is unavailable; native notifications remain
+  // optional when the browser has already granted permission.
+  if(!['inventory_manager','admin','transaction_manager'].includes(normalizedRole(membership?.role))) return;
+  const canUseNativeNotification = 'Notification' in window && Notification.permission === 'granted';
   const key=`inventroStockStates:${currentCompanyId()}`;
   const previous=JSON.parse(localStorage.getItem(key)||'{}');
   const next={};
@@ -2361,7 +2365,9 @@ function maybeNotifyStockState(items){
         ? `${item.name}: ${q} ${item.unit} remaining. Low limit: ${low} ${item.unit}.`
         : `${item.name}: ${q} ${item.unit} remaining. It is approaching the low limit of ${low} ${item.unit}.`;
       showTemporaryMessage(`${state==='low'?'🔴':'🟡'} ${item.name}: ${state==='low'?'LOW STOCK':'approaching low stock'} — ${q} ${item.unit}`,state==='low'?'error':'success');
-      try{new Notification(title,{body,tag:`inventro-stock-${item.id}`,renotify:true});}catch(_){ }
+      if(canUseNativeNotification){
+        try{new Notification(title,{body,tag:`inventro-stock-${item.id}`,renotify:true});}catch(_){ }
+      }
     }
   });
   localStorage.setItem(key,JSON.stringify(next));
