@@ -2475,3 +2475,395 @@ label {
   .account-toggle .avatar{width:34px;height:34px;flex-basis:34px}
   .account-identity strong,.account-identity span{max-width:92px}
 }
+
+
+/* Generic modal shell. Cash editors/warnings/changes use this shared shell so
+   they always float above the current page instead of being inserted into the
+   normal document flow. */
+.modal-overlay{
+  position:fixed;
+  inset:0;
+  z-index:10000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+  background:rgba(15,23,42,.56);
+  backdrop-filter:blur(5px);
+  -webkit-backdrop-filter:blur(5px);
+  overflow:auto;
+}
+
+/* =========================================================
+   CASH LEDGER — secure, readable financial workspace
+   ========================================================= */
+.cash-page .feature-header p:last-child{max-width:68ch}
+.cash-balance-card{
+  margin-bottom:16px;padding:20px;border:1px solid #d8e5f5;border-radius:18px;
+  background:linear-gradient(145deg,#fff,#f5f9ff);box-shadow:var(--shadow-sm)
+}
+.cash-balance-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.cash-balance-head span,.cash-balance-head small,.cash-balance-grid span{
+  display:block;color:var(--text-muted);font-size:11px;font-weight:650
+}
+.cash-balance-head strong{display:block;margin-top:5px;font-family:var(--font-head);font-size:29px;letter-spacing:-.04em}
+.cash-balance-head small{margin-top:2px}
+.cash-balance-status{
+  padding:7px 10px;border:1px solid #bcd3ff;border-radius:999px;background:var(--primary-soft);
+  color:var(--primary);font-size:10px;font-weight:800;letter-spacing:.08em
+}
+.cash-balance-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:17px;padding-top:15px;border-top:1px solid var(--border)}
+.cash-balance-grid div{padding:11px;border:1px solid var(--border);border-radius:11px;background:rgba(255,255,255,.75)}
+.cash-balance-grid strong{display:block;margin-top:4px;font-size:14px}
+.cash-entry-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.cash-entry-card .field{margin-bottom:14px}
+.cash-entry-lock{margin:2px 0 13px;padding:11px 12px;border:1px solid #dbe7f5;border-radius:10px;background:var(--surface-blue);color:var(--text-soft);font-size:12px}
+.cash-empty-departments{margin-top:10px;padding:11px 12px;border:1px dashed #f1b7b7;border-radius:10px;background:var(--red-soft);color:#8e2424;font-size:12px}
+.cash-empty-departments strong,.cash-empty-departments span{display:block}
+.cash-empty-departments span{margin-top:3px}
+.cash-transaction-list{display:flex;flex-direction:column;gap:9px}
+.cash-transaction-row{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;
+  border:1px solid var(--border);border-radius:12px;background:var(--surface-soft)
+}
+.cash-transaction-row.is-edited{border-color:#cbd5e1;background:#fbfcfe}
+.cash-tx-main{display:flex;align-items:center;gap:10px;min-width:0}
+.cash-tx-type{width:34px;height:34px;display:grid;place-items:center;flex:0 0 auto;border-radius:9px;font-weight:800}
+.cash-tx-type.received{background:var(--green-soft);color:var(--green)}
+.cash-tx-type.outflow{background:var(--red-soft);color:var(--red)}
+.cash-tx-main strong{display:block;font-size:13px}
+.cash-tx-main span,.cash-tx-main small{display:block;color:var(--text-muted);font-size:10px;line-height:1.4}
+.cash-tx-main span{margin-top:2px}
+.cash-tx-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex:0 0 auto}
+.cash-empty-list{padding:28px 15px;border:1px dashed var(--border-strong);border-radius:12px;text-align:center}
+.cash-empty-list>div{font-size:25px;margin-bottom:7px}
+.cash-empty-list strong{display:block;font-size:13px}
+.cash-empty-list span{display:block;margin-top:4px;color:var(--text-muted);font-size:11px}
+.cash-home-monitor{
+  margin-top:18px;padding:17px;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-sm)
+}
+.cash-home-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;margin-bottom:13px}
+.cash-home-head h2{margin:0 0 4px;font-family:var(--font-head);font-size:16px}
+.cash-home-head span{color:var(--text-muted);font-size:11px;line-height:1.45}
+.cash-home-controls{min-width:145px}
+.cash-home-controls label{margin-bottom:5px}
+.cash-home-controls input{width:100%;min-height:39px}
+.cash-home-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:10px}
+.cash-home-summary div{padding:9px;border:1px solid var(--border);border-radius:9px;background:var(--surface-soft)}
+.cash-home-summary span{display:block;color:var(--text-muted);font-size:9px}
+.cash-home-summary strong{display:block;margin-top:3px;font-size:12px}
+.cash-home-summary .closing{border-color:#cfe0ff;background:var(--primary-soft)}
+.cash-home-full-btn{margin-top:11px;min-height:43px}
+.department-type-switch{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.department-type-btn{min-height:52px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:11px;background:var(--surface);color:var(--text);font-weight:700;cursor:pointer}
+.department-type-btn.active{border-color:#bcd3ff;background:var(--primary-soft);color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,.05)}
+.cash-edit-modal,.cash-changes-modal{width:min(92vw,560px);max-height:88vh;overflow:auto;padding:0;border:1px solid var(--border);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-lg)}
+.cash-edit-modal{
+  max-height:min(88vh,760px);
+  overscroll-behavior:contain;
+  animation:inventoryModalIn .18s ease-out;
+}
+.cash-edit-modal .inventory-edit-body{max-height:calc(88vh - 150px);overflow:auto}
+.cash-edit-modal .inventory-edit-footer{position:sticky;bottom:0;background:var(--surface);z-index:1}
+.cash-changes-modal{animation:inventoryModalIn .18s ease-out}
+@media(max-width:650px){
+  .modal-overlay{padding:12px}
+  .cash-edit-modal,.cash-changes-modal{width:min(94vw,560px);max-height:92vh;border-radius:18px}
+  .cash-edit-modal .inventory-edit-body{max-height:calc(92vh - 140px)}
+}
+.cash-edit-locked-note{margin-top:4px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:var(--surface-soft);color:var(--text-muted);font-size:11px}
+.cash-change-list{padding:0 21px 21px;display:flex;flex-direction:column;gap:9px}
+.cash-change-card{padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--surface-soft)}
+.cash-change-card strong{font-size:12px}
+.cash-change-card span,.cash-change-card small{display:block;color:var(--text-muted);font-size:10px}
+.cash-change-card p{margin:6px 0 3px;font-size:12px}
+.cash-danger-overlay{background:rgba(71,13,13,.58)}
+.cash-danger-modal{width:min(92vw,530px);padding:23px;border:2px solid #dc2626;border-radius:18px;background:#fffafa;box-shadow:0 20px 55px rgba(127,29,29,.24)}
+.cash-danger-icon{width:46px;height:46px;display:grid;place-items:center;margin-bottom:9px;border-radius:12px;background:#fee2e2;font-size:24px}
+.cash-danger-label{margin:0 0 5px;color:#b91c1c;font-size:11px;font-weight:900;letter-spacing:.12em}
+.cash-danger-modal h2{margin:0 0 9px;color:#7f1d1d;font-family:var(--font-head);font-size:19px}
+.cash-danger-modal>p{margin:0;color:#6b2b2b;font-size:13px;line-height:1.55}
+.cash-danger-list{display:flex;flex-direction:column;gap:5px;margin:14px 0;padding:12px;border:1px solid #fecaca;border-radius:10px;background:#fff1f2;color:#7f1d1d;font-size:11px;line-height:1.45}
+.cash-danger-list strong{font-size:12px}
+.cash-danger-actions{display:grid;grid-template-columns:1fr 1.5fr;gap:9px;margin-top:15px}
+@media(max-width:650px){
+  .cash-entry-grid,.cash-balance-grid{grid-template-columns:1fr}
+  .cash-home-head{flex-direction:column}
+  .cash-home-controls{width:100%}
+  .cash-home-summary{grid-template-columns:repeat(2,1fr)}
+  .cash-transaction-row{align-items:flex-start;flex-direction:column}
+  .cash-tx-actions{width:100%;justify-content:flex-start}
+}
+@media(max-width:420px){
+  .cash-home-summary{grid-template-columns:1fr 1fr}
+  .cash-danger-actions{grid-template-columns:1fr}
+}
+
+/* =========================================================
+   CASH LEDGER — compact header summary
+   Keeps Closing / Opening / Received / Outflow in one slim bar.
+   ========================================================= */
+.cash-balance-card{
+  position:relative;
+  display:grid;
+  grid-template-columns:1.25fr 1fr 1fr 1fr;
+  align-items:center;
+  gap:0;
+  margin-bottom:14px;
+  padding:10px 12px;
+  min-height:68px;
+  border-radius:14px;
+}
+.cash-balance-head{
+  display:contents;
+}
+.cash-balance-head > div:first-child{
+  min-width:0;
+  padding:0 10px 0 2px;
+  display:grid;
+  grid-template-columns:auto 1fr;
+  grid-template-areas:
+    "meta meta"
+    "value label";
+  align-items:baseline;
+  column-gap:7px;
+}
+.cash-balance-head > div:first-child > span{
+  grid-area:meta;
+  margin:0 0 2px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:8px;
+  line-height:1.2;
+  font-weight:650;
+}
+.cash-balance-head > div:first-child > strong{
+  grid-area:value;
+  margin:0;
+  font-size:19px;
+  line-height:1.1;
+  letter-spacing:-.035em;
+}
+.cash-balance-head > div:first-child > small{
+  grid-area:label;
+  margin:0;
+  color:var(--text-muted);
+  font-size:8px;
+  line-height:1.2;
+  white-space:nowrap;
+}
+.cash-balance-status{
+  position:absolute;
+  top:7px;
+  right:9px;
+  padding:3px 6px;
+  font-size:7px;
+  line-height:1;
+}
+.cash-balance-grid{
+  display:contents;
+  margin:0;
+  padding:0;
+  border:0;
+}
+.cash-balance-grid div{
+  min-width:0;
+  padding:4px 8px;
+  border:0;
+  border-left:1px solid var(--border);
+  border-radius:0;
+  background:transparent;
+}
+.cash-balance-grid span{
+  margin:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:8px;
+  line-height:1.2;
+}
+.cash-balance-grid strong{
+  display:block;
+  margin-top:3px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12px;
+  line-height:1.15;
+}
+.cash-balance-grid div:nth-child(2) strong{color:var(--green)}
+.cash-balance-grid div:nth-child(3) strong{color:var(--red)}
+.cash-balance-grid div:first-child strong{color:var(--text)}
+
+@media(max-width:650px){
+  .cash-balance-card{
+    grid-template-columns:1.2fr 1fr 1fr 1fr;
+    min-height:64px;
+    padding:8px 6px;
+  }
+  .cash-balance-head > div:first-child{
+    padding-right:5px;
+  }
+  .cash-balance-head > div:first-child > strong{
+    font-size:17px;
+  }
+  .cash-balance-head > div:first-child > small{
+    font-size:7px;
+  }
+  .cash-balance-grid div{
+    padding:4px 5px;
+  }
+  .cash-balance-grid span{
+    font-size:7px;
+  }
+  .cash-balance-grid strong{
+    font-size:11px;
+  }
+  .cash-balance-status{
+    top:5px;
+    right:6px;
+  }
+}
+
+@media(max-width:360px){
+  .cash-balance-card{
+    grid-template-columns:1.15fr 1fr 1fr 1fr;
+  }
+  .cash-balance-head > div:first-child > strong{
+    font-size:16px;
+  }
+  .cash-balance-grid div{
+    padding-left:4px;
+    padding-right:4px;
+  }
+}
+
+/* =========================================================
+   CASH LEDGER — clean compact balance header v2
+   ========================================================= */
+.cash-balance-card{
+  display:grid;
+  grid-template-columns:1.45fr 1fr 1fr 1fr;
+  align-items:stretch;
+  gap:0;
+  min-height:82px;
+  padding:11px 10px;
+  margin-bottom:15px;
+  border-radius:15px;
+}
+.cash-balance-head{
+  display:contents;
+}
+.cash-balance-head > div:first-child{
+  min-width:0;
+  padding:2px 12px 2px 4px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:2px;
+}
+.cash-balance-head > div:first-child > span{
+  order:0;
+  margin:0;
+  font-size:9px;
+  line-height:1.25;
+  font-weight:650;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.cash-balance-head > div:first-child > strong{
+  order:1;
+  margin:0;
+  font-size:21px;
+  line-height:1.08;
+  letter-spacing:-.035em;
+}
+.cash-balance-head > div:first-child > small{
+  order:2;
+  margin:0;
+  font-size:9px;
+  line-height:1.2;
+  color:var(--text-muted);
+  white-space:nowrap;
+}
+.cash-balance-status{
+  position:absolute;
+  top:7px;
+  right:8px;
+  padding:3px 7px;
+  font-size:7px;
+  line-height:1;
+  z-index:2;
+}
+.cash-balance-grid{
+  display:contents;
+}
+.cash-balance-grid div{
+  min-width:0;
+  min-height:58px;
+  padding:7px 9px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  border:0;
+  border-left:1px solid var(--border);
+  border-radius:0;
+  background:transparent;
+}
+.cash-balance-grid span{
+  margin:0 0 4px;
+  color:var(--text-muted);
+  font-size:9px;
+  line-height:1.15;
+  font-weight:650;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.cash-balance-grid strong{
+  margin:0;
+  font-size:13px;
+  line-height:1.15;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.cash-balance-grid div:first-child strong{color:var(--text)}
+.cash-balance-grid div:nth-child(2) strong{color:var(--green)}
+.cash-balance-grid div:nth-child(3) strong{color:var(--red)}
+
+@media(max-width:650px){
+  .cash-balance-card{
+    grid-template-columns:1.45fr 1fr 1fr 1fr;
+    min-height:82px;
+    padding:10px 7px;
+  }
+  .cash-balance-head > div:first-child{
+    padding-left:4px;
+    padding-right:9px;
+  }
+  .cash-balance-head > div:first-child > strong{font-size:20px}
+  .cash-balance-head > div:first-child > span,
+  .cash-balance-head > div:first-child > small{font-size:8px}
+  .cash-balance-grid div{padding-left:7px;padding-right:5px}
+  .cash-balance-grid span{font-size:8px}
+  .cash-balance-grid strong{font-size:12px}
+  .cash-balance-status{top:6px;right:6px}
+}
+
+@media(max-width:380px){
+  .cash-balance-card{
+    grid-template-columns:1.4fr 1fr 1fr 1fr;
+    min-height:80px;
+    padding:9px 5px;
+  }
+  .cash-balance-head > div:first-child{padding-left:3px;padding-right:6px}
+  .cash-balance-head > div:first-child > strong{font-size:18px}
+  .cash-balance-head > div:first-child > span,
+  .cash-balance-head > div:first-child > small{font-size:7.5px}
+  .cash-balance-grid div{padding-left:5px;padding-right:3px}
+  .cash-balance-grid span{font-size:7.5px}
+  .cash-balance-grid strong{font-size:11px}
+}
