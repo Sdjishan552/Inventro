@@ -3049,3 +3049,81 @@ body{
   .cash-transactions-page .admin-card:not(.cash-filter-card),
   .cash-live-update{animation:none!important}
 }
+
+
+/* =========================================================
+   FINAL FIX — Admin > History > Transaction Manager
+   Keep the two launcher cards as a proper wide 2-column menu.
+   When either launcher is replaced by its workspace, the parent
+   becomes a normal full-width block so the workspace cannot be
+   trapped inside one grid column.
+   ========================================================= */
+
+/* Desktop: use the same broad workspace width as the other History views. */
+.feature-page:has(#tm-history-submenu){
+  max-width: 1180px;
+}
+
+/* Initial Transaction Manager menu — two balanced cards, never a tiny column. */
+.history-admin-menu.tm-history-submenu{
+  width:100%;
+  max-width:none;
+  margin:24px 0 0;
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;
+}
+
+.history-admin-menu.tm-history-submenu .history-account-card{
+  width:100%;
+  min-width:0;
+  min-height:145px;
+  padding:22px;
+}
+
+/* Once JS replaces the two menu cards with a report/order workspace,
+   the parent must stop behaving like a 2-column grid. */
+.history-admin-menu.tm-history-submenu:has(.tm-admin-live-wrap),
+.history-admin-menu.tm-history-submenu:has(.tm-admin-order-history-wrap){
+  display:block;
+  width:100%;
+  max-width:none;
+  margin:18px 0 0;
+}
+
+.history-admin-menu.tm-history-submenu:has(.tm-admin-live-wrap) .tm-admin-live-wrap,
+.history-admin-menu.tm-history-submenu:has(.tm-admin-order-history-wrap) .tm-admin-order-history-wrap{
+  display:block;
+  width:100%;
+  max-width:none;
+  min-width:0;
+  box-sizing:border-box;
+}
+
+/* Supplier order workspace */
+.tm-admin-order-history-wrap .history-workspace-bar,
+.tm-admin-order-history-wrap .tm-order-history,
+.tm-admin-order-history-wrap .tm-order-card{
+  width:100%;
+  max-width:none;
+  box-sizing:border-box;
+}
+
+/* Live Daily Report workspace */
+.tm-admin-live-wrap .history-workspace-bar,
+.tm-admin-live-wrap .tm-date-selector,
+.tm-admin-live-wrap .tm-live-panel{
+  width:100%;
+  max-width:none;
+  box-sizing:border-box;
+}
+
+@media(max-width:700px){
+  .feature-page:has(#tm-history-submenu){
+    max-width:100%;
+  }
+
+  .history-admin-menu.tm-history-submenu{
+    grid-template-columns:1fr;
+  }
+}
