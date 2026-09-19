@@ -5,6 +5,9 @@
 #
 # This file cannot list a correct hash of itself (the hash would change
 # the moment it's written), so there is intentionally no self-entry.
+# Inventro v106 UI update
+# Account dropdown interaction and professional account control updated.
+# Language toggle remains English / বাংলা (bn-IN), stored per device.
 
 7aedfa03123d40e7ee3a53c713e7eaef62d56e783291a94abb700cdb65f36abc  /mnt/data/Inventro-security-hardened/app.js
 31ff3407b35f62d2abd8b1829a76803e93745f03a33181326b3356e310ce2691  /mnt/data/Inventro-security-hardened/firebase.json
