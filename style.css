@@ -3240,3 +3240,71 @@ body{
   content:"";position:absolute;left:0;right:0;top:0;height:2px;opacity:.75;
   background:linear-gradient(90deg,#8b5cf6,#06b6d4,#14b8a6);
 }
+
+
+/* =========================================================
+   DATE DISPLAY — DD-MM-YYYY
+   Native date inputs keep their ISO value internally for filtering,
+   while the visible UI is consistently rendered as DD-MM-YYYY.
+   ========================================================= */
+.date-ddmmyyyy-wrap {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.date-ddmmyyyy-wrap::after {
+  content: attr(data-date-display);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 42px 0 13px;
+  color: var(--text);
+  font-size: 14px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.date-ddmmyyyy-wrap > input[type="date"] {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: transparent;
+}
+
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-text,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-month-field,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-day-field,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-year-field {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.date-ddmmyyyy-wrap > input[type="date"]:focus + * {
+  color: var(--text);
+}
+
+/* v45 — STRICT DD-MM-YYYY date presentation
+   The native <input type="date"> keeps its YYYY-MM-DD value internally so
+   existing calendar/query logic remains unchanged. Its native text is hidden
+   and the wrapper paints the only visible date as DD-MM-YYYY. */
+.date-ddmmyyyy-wrap{position:relative;display:block;width:100%;}
+.date-ddmmyyyy-wrap::after{content:attr(data-date-display);position:absolute;inset:0;z-index:2;display:flex;align-items:center;padding:0 42px 0 13px;color:var(--text);font:inherit;font-size:14px;line-height:1;pointer-events:none;white-space:nowrap;}
+.date-ddmmyyyy-wrap > input[type="date"]{position:relative;z-index:1;color:transparent!important;-webkit-text-fill-color:transparent!important;caret-color:transparent;}
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-text,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-month-field,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-day-field,
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-datetime-edit-year-field{color:transparent!important;-webkit-text-fill-color:transparent!important;}
+.date-ddmmyyyy-wrap > input[type="date"]::-webkit-calendar-picker-indicator{position:relative;z-index:3;opacity:.75;cursor:pointer;padding:4px;}
