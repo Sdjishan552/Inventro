@@ -1,10 +1,10 @@
-const CACHE = 'inventro-shell-v120-request-date-live';
+const CACHE = 'inventro-shell-v121-request-date-colours-icon';
 
 const CORE = [
   './',
   './index.html',
-  './style.css?v=111',
-  './app.js?v=113',
+  './style.css?v=121',
+  './app.js?v=121',
   './manifest.json'
 ];
 
