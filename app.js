@@ -975,24 +975,41 @@ function canReceiveStock() { return canInventoryOperate(); }
 function canCreateRequest() { return ['inventory_manager','transaction_manager'].includes(membership?.role) || isStockRequesterRole(membership?.role); }
 function canManageRequests() { return membership?.role === 'inventory_manager'; }
 
-function requestsQuery(companyId) {
-  const base = collection(db, 'companies', companyId, 'requests');
-  if (['admin','inventory_manager'].includes(normalizedRole(membership?.role))) return base;
-  return query(base, where('requestedByUid', '==', auth.currentUser?.uid || ''));
+function requestDayBounds(dateKey=localDateKey()) {
+  const [year, month, day] = String(dateKey).split('-').map(Number);
+  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const end = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+  return {start, end};
 }
 
-async function listRequests() {
+function requestsQuery(companyId, dateKey=null) {
+  const base = collection(db, 'companies', companyId, 'requests');
+  const isCompanyWide = ['admin','inventory_manager'].includes(normalizedRole(membership?.role));
+  const clauses = [];
+  if (!isCompanyWide) clauses.push(where('requestedByUid', '==', auth.currentUser?.uid || ''));
+  if (dateKey) {
+    const {start, end} = requestDayBounds(dateKey);
+    // Date filtering is deliberately applied to the authoritative Firestore
+    // read. This keeps the Requests page date-scoped instead of loading the
+    // entire historical request queue on every open.
+    if (isCompanyWide) {
+      return query(base, where('createdAt', '>=', start), where('createdAt', '<', end));
+    }
+    // Requester roles use their authorized single-field query and then apply
+    // the date locally. This avoids requiring a composite Firestore index.
+    return query(base, ...clauses);
+  }
+  return clauses.length ? query(base, ...clauses) : base;
+}
+
+async function listRequests(dateKey=null) {
   const companyId = currentCompanyId();
   if (!companyId) return [];
-  // Admin/Inventory Manager can read the company request queue. Other roles
-  // query only their own requests so the Security Rules can enforce the same
-  // boundary server-side.
-  // Always read the authoritative request collection when the Requests page opens.
-  // The realtime listener is still used to trigger refreshes, but an in-memory
-  // snapshot must never make the page appear empty while the live listener is
-  // still settling (or after a listener reconnect).
-  const raw = (await getDocs(requestsQuery(companyId))).docs.map(d=>({id:d.id,...d.data()}));
-  return raw.sort((a,b)=>{
+  const raw = (await getDocs(requestsQuery(companyId, dateKey))).docs.map(d=>({id:d.id,...d.data()}));
+  const visible = dateKey && ['admin','inventory_manager'].includes(normalizedRole(membership?.role))
+    ? raw
+    : dateKey ? raw.filter(r => localDateKey(r.createdAt?.toDate?.() || new Date(r.createdAt || 0)) === dateKey) : raw;
+  return visible.sort((a,b)=>{
     const at=a.createdAt?.toMillis?.()||0, bt=b.createdAt?.toMillis?.()||0; return bt-at;
   });
 }
@@ -4228,11 +4245,13 @@ function startRequestListListener(){
   stopRequestListListener();
   requestListCompanyId=companyId;
   requestListUnsubscribe=onSnapshot(
-    requestsQuery(companyId),
+    requestsQuery(companyId, localDateKey()),
     ()=>{
       if(view!=='requests') return;
-      // Let the current request page refresh itself from the authoritative Firestore snapshot.
-      // Debouncing prevents multiple writes (status/event/notification) from causing a render storm.
+      const selectedDate=document.querySelector('#request-date-filter')?.value || localDateKey();
+      if(selectedDate!==localDateKey()) return;
+      // Only today's queue is live. Historical dates are loaded on demand when
+      // the user selects them, so old records never flood the initial screen.
       if(requestListRenderTimer) clearTimeout(requestListRenderTimer);
       requestListRenderTimer=setTimeout(()=>{requestListRenderTimer=null;if(view==='requests') renderRequests();},50);
     },
@@ -4273,7 +4292,7 @@ async function markNotificationRead(notificationId) {
 }
 
 async function renderRequests(){
-  if(!canCreateRequest()&&!canManageRequests()){navigate('home');return;}let items=[],requests=[],departments=[],notifications=[],error='';try{items=await listItems();requests=await listRequests();departments=await listDepartments();if(['stock_requester','chef','request','transaction_manager'].includes(membership?.role))notifications=await listMyNotifications();}catch(err){error=friendlyError(err);}const canManage=canManageRequests(),canViewAllRequests=['admin','inventory_manager'].includes(membership?.role);const requestSelfService=['stock_requester','chef','request','transaction_manager'].includes(membership?.role);let requestDateFilter='';
+  if(!canCreateRequest()&&!canManageRequests()){navigate('home');return;}let items=[],requests=[],departments=[],notifications=[],error='';try{items=await listItems();requests=await listRequests(localDateKey());departments=await listDepartments();if(['stock_requester','chef','request','transaction_manager'].includes(membership?.role))notifications=await listMyNotifications();}catch(err){error=friendlyError(err);}const canManage=canManageRequests(),canViewAllRequests=['admin','inventory_manager'].includes(membership?.role);const requestSelfService=['stock_requester','chef','request','transaction_manager'].includes(membership?.role);let requestDateFilter=localDateKey();
   root.innerHTML=`<div class="dashboard feature-page"><div class="topbar"><button class="back-btn" id="requests-back">‹ Back</button><div class="topbar-brand">Inventro</div></div><section class="feature-header"><p class="eyebrow">Kitchen workflow</p><h1>Stock Requests</h1></section>${requestSelfService?`<section class="admin-card"><div class="admin-card-title"><div><h2>New request</h2></div></div><div class="field"><label for="request-item">Item</label><select id="request-item">${items.map(i=>`<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)} — ${escapeHtml(formatQuantityParts(i.quantity,i.unit))} available</option>`).join('')}</select></div><div class="field"><label for="request-department">Department</label><select id="request-department"><option value="">Select department…</option>${departments.map(d=>`<option value="${escapeHtml(d.name)}">${escapeHtml(d.name)}</option>`).join('')}</select></div><div class="field"><label>Quantity needed</label><div id="request-quantity-fields" class="quantity-fields-host">${quantityFieldsHtml('request',items[0]?.unit||'')}</div></div><div class="field"><label for="request-note">Reason / note</label><input id="request-note" type="text" maxlength="120" placeholder="e.g. Dinner preparation"></div><button class="btn btn-primary" id="request-save" ${items.length?'':'disabled'}>Send request</button></section>`:''}${error?`<div class="error-box">${escapeHtml(error)}</div>`:''}${requestSelfService?`<section class="admin-card stock-request-workspace"><div class="stock-request-tabs" role="tablist" aria-label="Stock request information"><button type="button" class="stock-request-tab active" id="stock-tab-notifications" role="tab" aria-selected="true" aria-controls="stock-panel-notifications">🔔 My notifications ${notifications.filter(n=>!n.read).length?`<span class="notification-count">${notifications.filter(n=>!n.read).length}</span>`:''}</button><button type="button" class="stock-request-tab" id="stock-tab-requests" role="tab" aria-selected="false" aria-controls="stock-panel-requests">📝 My requests</button></div><div class="stock-request-tab-panel active" id="stock-panel-notifications" role="tabpanel"><div class="stock-request-panel-head"><div><h2>My notifications</h2><p>Request status updates and stock dispatch notifications.</p></div></div><div id="notification-list-wrap" class="notification-list">${notifications.map(n=>`<article class="notification-item ${n.read?'read':'unread'}"><div><strong>${escapeHtml(n.title||'Request update')}</strong><p>${escapeHtml(n.message||'')}</p><small>${escapeHtml(formatDate(n.createdAt))}</small></div>${!n.read?`<button class="small-action" data-read-notification="${escapeHtml(n.id)}">Mark read</button>`:''}</article>`).join('')||`<div class="empty-team"><div class="empty-icon">🔔</div><strong>No notifications</strong><span>Your request updates will appear here.</span></div>`}</div></div><div class="stock-request-tab-panel" id="stock-panel-requests" role="tabpanel" hidden><div class="stock-request-panel-head"><div><h2>My requests <span id="request-visible-count"></span></h2><p>Track the requests you have submitted and their current status.</p></div></div><div class="request-filter-card-inner"><div class="request-filter-row"><div class="field"><label for="request-date-filter">Filter by date</label><input id="request-date-filter" type="date"></div><button class="small-action" id="request-date-clear" type="button">Show all dates</button></div></div><div id="request-list-render" class="request-list"></div></div></section>`:`<section class="admin-card request-filter-card"><div class="request-filter-row"><div class="field"><label for="request-date-filter">Filter by date</label><input id="request-date-filter" type="date"></div><button class="small-action" id="request-date-clear" type="button">Show all dates</button></div></section><section class="admin-card"><div class="admin-card-title"><div><h2>${canViewAllRequests?'All requests':'My requests'} <span id="request-visible-count"></span></h2><p>Approved requests stay yellow until dispatched. Dispatched requests turn green.</p></div></div><div id="request-list-render" class="request-list"></div></section>`}</div>`;
   const listEl=root.querySelector('#request-list-render'),countEl=root.querySelector('#request-visible-count');function renderList(){const visible=requests.filter(r=>(canViewAllRequests||r.requestedByUid===auth.currentUser?.uid)&&(!requestDateFilter||localDateKey(r.createdAt?.toDate?.()||new Date(r.createdAt||0))===requestDateFilter));countEl.textContent=`(${visible.length})`;listEl.innerHTML=visible.map(r=>`<article class="request-card request-status-card-${escapeHtml(r.status)}"><div><div class="request-title"><strong>${escapeHtml(r.itemName)}</strong><span class="request-status ${escapeHtml(r.status)}">${escapeHtml(r.status==='approved'?'READY TO DISPATCH':r.status==='fulfilled'?'DISPATCHED':r.status.toUpperCase())}</span></div><div class="request-qty">${escapeHtml(formatQuantityParts(r.quantity,r.unit))}</div><div class="stock-meta">Department: <strong>${escapeHtml(r.department||'Not specified')}</strong> · By ${escapeHtml(personRef(r.requestedByEmail||'', r.requestedByRole||'stock_requester', r.requestedByName||''))} · ${escapeHtml(formatDate(r.createdAt))}</div>${r.note?`<div class="request-note">${escapeHtml(r.note)}</div>`:''}</div><div class="request-actions">${canManage&&r.status==='pending'?`<button class="small-action approve" data-request-action="approve" data-id="${escapeHtml(r.id)}">Approve</button><button class="small-action reject" data-request-action="reject" data-id="${escapeHtml(r.id)}">Reject</button>`:''}${canManage&&r.status==='approved'?`<button class="small-action fulfill-action" data-request-action="fulfill" data-id="${escapeHtml(r.id)}">Dispatch</button>`:''}${r.status==='pending'&&r.requestedByUid===auth.currentUser?.uid?`<button class="small-action reject" data-request-action="cancel" data-id="${escapeHtml(r.id)}">Cancel request</button>`:''}</div></article>`).join('')||`<div class="empty-team"><div class="empty-icon">📝</div><strong>No requests for this date</strong><span>Try another date or show all dates.</span></div>`;listEl.querySelectorAll('[data-request-action]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{const action=btn.dataset.requestAction;if(action==='fulfill')await fulfillRequest(btn.dataset.id);else if(action==='cancel')await cancelStockRequest(btn.dataset.id);else await updateRequestStatus(btn.dataset.id,action==='approve'?'approved':'rejected');showTemporaryMessage(action==='fulfill'?'Request dispatched and stock recorded.':action==='cancel'?'Request cancelled.':'Request updated.','success');await renderRequests();}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));}
   if(requestSelfService){
@@ -4281,7 +4300,7 @@ async function renderRequests(){
     const activateStockTab=(which)=>{const notificationsActive=which==='notifications';tabN.classList.toggle('active',notificationsActive);tabR.classList.toggle('active',!notificationsActive);tabN.setAttribute('aria-selected',String(notificationsActive));tabR.setAttribute('aria-selected',String(!notificationsActive));panelN.classList.toggle('active',notificationsActive);panelR.classList.toggle('active',!notificationsActive);panelN.hidden=!notificationsActive;panelR.hidden=notificationsActive;};
     tabN.addEventListener('click',()=>activateStockTab('notifications'));tabR.addEventListener('click',()=>activateStockTab('requests'));activateStockTab('notifications');
   }
-  root.querySelector('#request-item')?.addEventListener('change',e=>{const item=items.find(i=>String(i.id)===String(e.target.value));const host=root.querySelector('#request-quantity-fields');if(host)host.innerHTML=quantityFieldsHtml('request',item?.unit||'');});root.querySelector('#request-date-filter').addEventListener('change',e=>{requestDateFilter=e.target.value;renderList();});root.querySelector('#request-date-clear').addEventListener('click',()=>{requestDateFilter='';root.querySelector('#request-date-filter').value='';renderList();});root.querySelector('#requests-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#request-save')?.addEventListener('click',async()=>{const b=root.querySelector('#request-save');b.disabled=true;b.textContent='Sending…';try{const requestItem=items.find(i=>String(i.id)===String(root.querySelector('#request-item')?.value));if(!requestItem)throw new Error('Choose an item first.');const requestQty=readQuantityFields('request',requestItem.unit,{allowZero:false});await createStockRequest({itemId:requestItem.id,quantity:requestQty,department:root.querySelector('#request-department').value,note:root.querySelector('#request-note').value});showTemporaryMessage('Stock request sent.','success');await renderRequests();const myRequestsTab=root.querySelector('#stock-tab-requests');if(myRequestsTab){myRequestsTab.click();}}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;b.textContent='Send request';}});root.querySelectorAll('[data-read-notification]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await markNotificationRead(btn.dataset.readNotification);}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));startMyNotificationListener();startRequestListListener();renderList();
+  root.querySelector('#request-item')?.addEventListener('change',e=>{const item=items.find(i=>String(i.id)===String(e.target.value));const host=root.querySelector('#request-quantity-fields');if(host)host.innerHTML=quantityFieldsHtml('request',item?.unit||'');});root.querySelector('#request-date-filter').value=requestDateFilter;root.querySelector('#request-date-filter').addEventListener('change',async e=>{const selected=e.target.value||localDateKey();requestDateFilter=selected;try{requests=await listRequests(selected);renderList();}catch(err){showTemporaryMessage(friendlyError(err),'error');}});root.querySelector('#request-date-clear').addEventListener('click',async()=>{requestDateFilter=localDateKey();root.querySelector('#request-date-filter').value=requestDateFilter;try{requests=await listRequests(requestDateFilter);renderList();}catch(err){showTemporaryMessage(friendlyError(err),'error');}});root.querySelector('#requests-back').addEventListener('click',()=>navigateBack('home'));root.querySelector('#request-save')?.addEventListener('click',async()=>{const b=root.querySelector('#request-save');b.disabled=true;b.textContent='Sending…';try{const requestItem=items.find(i=>String(i.id)===String(root.querySelector('#request-item')?.value));if(!requestItem)throw new Error('Choose an item first.');const requestQty=readQuantityFields('request',requestItem.unit,{allowZero:false});await createStockRequest({itemId:requestItem.id,quantity:requestQty,department:root.querySelector('#request-department').value,note:root.querySelector('#request-note').value});showTemporaryMessage('Stock request sent.','success');await renderRequests();const myRequestsTab=root.querySelector('#stock-tab-requests');if(myRequestsTab){myRequestsTab.click();}}catch(err){showTemporaryMessage(friendlyError(err),'error');b.disabled=false;b.textContent='Send request';}});root.querySelectorAll('[data-read-notification]').forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;try{await markNotificationRead(btn.dataset.readNotification);}catch(err){showTemporaryMessage(friendlyError(err),'error');btn.disabled=false;}}));startMyNotificationListener();startRequestListListener();renderList();
 }
 
 
