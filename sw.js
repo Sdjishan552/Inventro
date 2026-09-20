@@ -1,10 +1,10 @@
-const CACHE = 'inventro-shell-v119-stock-low-first-all-roles';
+const CACHE = 'inventro-shell-v120-request-date-live';
 
 const CORE = [
   './',
   './index.html',
-  './style.css?v=110',
-  './app.js?v=112',
+  './style.css?v=111',
+  './app.js?v=113',
   './manifest.json'
 ];
 
