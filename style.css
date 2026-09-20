@@ -930,6 +930,39 @@ input.code-input {
   font-size: 12px;
 }
 
+.stock-alert-toast {
+  position: fixed;
+  z-index: 1100;
+  top: 16px;
+  left: 50%;
+  width: min(92vw, 560px);
+  padding: 13px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, -14px);
+  opacity: 0;
+  animation: stockAlertIn 0.24s ease forwards;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: center;
+}
+.stock-alert-toast.error {
+  border-color: #fecaca;
+  background: var(--red-soft);
+  color: #b42323;
+}
+.stock-alert-toast.success {
+  border-color: #f4d58a;
+  background: var(--orange-soft);
+  color: #8a5a00;
+}
+@keyframes stockAlertIn {
+  to { transform: translate(-50%, 0); opacity: 1; }
+}
+
 .toast {
   position: fixed;
   z-index: 1000;
@@ -3126,4 +3159,84 @@ body{
   .history-admin-menu.tm-history-submenu{
     grid-template-columns:1fr;
   }
+}
+
+
+/* =========================================================
+   REQUEST UI — FRESH PROFESSIONAL COLOUR PALETTE
+   Keeps the light theme and layout; adds distinct soothing accents.
+   ========================================================= */
+.request-filter-row{
+  padding:12px;
+  border:1px solid #d8cfee;
+  border-radius:14px;
+  background:linear-gradient(135deg,#faf8ff 0%,#f4fbff 100%);
+}
+.request-filter-row .field label{color:#5b4b8a}
+.request-filter-row input[type=date],
+.request-filter-row select{
+  border-color:#cfc6e8 !important;
+  background:#fff !important;
+}
+.request-filter-row input[type=date]:focus,
+.request-filter-row select:focus{
+  border-color:#8b5cf6 !important;
+  outline:2px solid rgba(139,92,246,.14);
+}
+.request-filter-row .small-action{
+  background:#f0ebff;
+  border-color:#c9b8f5;
+  color:#6841b5;
+}
+.request-filter-row .small-action:hover{background:#e7ddff}
+
+.request-card{
+  position:relative;
+  overflow:hidden;
+  background:linear-gradient(135deg,#ffffff 0%,#fbfcff 65%,#f7f4ff 100%);
+  border-color:#d9d4e8 !important;
+  box-shadow:0 4px 14px rgba(80,62,120,.06) !important;
+}
+.request-card:hover{
+  border-color:#b9a9df !important;
+  box-shadow:0 8px 22px rgba(80,62,120,.10) !important;
+}
+.request-status-card-pending{
+  border-left-color:#f59e0b !important;
+  background:linear-gradient(135deg,#fffdf7,#fff8e8) !important;
+}
+.request-status-card-approved{
+  border-left-color:#8b5cf6 !important;
+  background:linear-gradient(135deg,#ffffff,#f6f1ff) !important;
+}
+.request-status-card-fulfilled{
+  border-left-color:#14b8a6 !important;
+  background:linear-gradient(135deg,#ffffff,#effcf9) !important;
+}
+.request-status-card-rejected{
+  border-left-color:#f43f5e !important;
+  background:linear-gradient(135deg,#ffffff,#fff1f4) !important;
+}
+.request-status.pending{color:#a16207;background:#fff3c4}
+.request-status.approved{color:#6d28d9;background:#ede9fe}
+.request-status.fulfilled{color:#0f766e;background:#ccfbf1}
+.request-status.rejected{color:#be123c;background:#ffe4e9}
+
+/* Request headings and metadata use varied but restrained accents. */
+.request-card .request-title{color:#27324a}
+.request-card .request-meta{color:#697386}
+.request-card .request-quantity{color:#0f766e}
+
+/* General app accent variety without changing structure. */
+.admin-card-title h2{color:#26334d}
+.section-title{color:#35415a}
+.inventory-card{background:linear-gradient(135deg,#fff,#f5fbff)}
+.order-card{background:linear-gradient(135deg,#fff,#fff8ef)}
+.transaction-card{background:linear-gradient(135deg,#fff,#f4fffc)}
+.stat-card{background:linear-gradient(135deg,#fff,#f8f5ff)}
+
+/* Small accent line on major workspace cards. */
+.request-card::before,.inventory-card::before,.order-card::before,.transaction-card::before{
+  content:"";position:absolute;left:0;right:0;top:0;height:2px;opacity:.75;
+  background:linear-gradient(90deg,#8b5cf6,#06b6d4,#14b8a6);
 }
