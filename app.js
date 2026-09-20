@@ -415,6 +415,46 @@ function formatDate(value) {
   return `${day}-${month}-${year}, ${time}`;
 }
 
+// ---- Consistent date display: DD-MM-YYYY everywhere in the UI ----
+// Firestore/query date keys remain ISO (YYYY-MM-DD) internally; only the
+// user-facing representation is changed so filtering and database queries
+// continue to work exactly as before.
+function formatDateKey(dateKey) {
+  const m = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(dateKey || '');
+}
+
+// Any date key that reaches a user-facing label, export, filename, PDF, or
+// share message must pass through this formatter. ISO date keys are retained
+// only internally for Firestore queries and storage.
+function userDate(dateKey) { return formatDateKey(dateKey); }
+
+function installDateDisplayFormatting(scope = document) {
+  scope.querySelectorAll?.('input[type="date"]:not([data-ddmmyyyy-ready])').forEach(input => {
+    input.setAttribute('data-ddmmyyyy-ready', '1');
+    input.closest('.date-ddmmyyyy-wrap') || (() => {
+      const wrap = document.createElement('span');
+      wrap.className = 'date-ddmmyyyy-wrap';
+      input.parentNode.insertBefore(wrap, input);
+      wrap.appendChild(input);
+
+      const sync = () => {
+        wrap.dataset.dateDisplay = formatDateKey(input.value) || 'dd-mm-yyyy';
+      };
+      input.addEventListener('input', sync);
+      input.addEventListener('change', sync);
+      input.addEventListener('blur', sync);
+      sync();
+    })();
+  });
+}
+
+if (typeof window !== 'undefined' && typeof MutationObserver !== 'undefined') {
+  const dateDisplayObserver = new MutationObserver(() => installDateDisplayFormatting(document));
+  dateDisplayObserver.observe(document.body, { childList: true, subtree: true });
+  installDateDisplayFormatting(document);
+}
+
 function formatQty(value){
   const n=Number(value||0);
   if(!Number.isFinite(n)) return '0';
@@ -3416,14 +3456,14 @@ function buildTransactionManagerDailyCsvFile(day, rows, items, activity='all', d
   if (membership?.role !== 'transaction_manager') throw new Error('Only the Transaction Manager can access the daily transaction Excel report.');
   const report = buildTransactionManagerDailyReport(rows, day, {activity, department, items});
   const selected = report.todayRows.slice().sort((a,b)=>{ const t=(a.createdAt?.toMillis?.()||0)-(b.createdAt?.toMillis?.()||0); if(t) return t; return String(a.itemName||'').localeCompare(String(b.itemName||''),undefined,{sensitivity:'base'}); });
-  if(!selected.length) throw new Error(`No matching Inventory Manager transactions were recorded on ${day}.`);
+  if(!selected.length) throw new Error(`No matching Inventory Manager transactions were recorded on ${userDate(day)}.`);
   const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;
   const movementFilter=activity==='receive'?'Received':activity==='dispatch'?'Dispatched':'All movements';
   const departmentFilter=department==='all'?'All departments':department;
-  const lines=[['Inventro Transaction Manager Daily Excel Report'],['Date',day],['Movement filter',movementFilter],['Department filter',departmentFilter],['Generated',formatDate(new Date())],[],['Item Name','Movement','Department','Quantity','Unit','Time','Person ID','Role','Requested By','Request ID','Note','Status'],...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit||'',formatDate(r.createdAt),r.byEmail?shortPersonId(r.byEmail,r.byRole||r.actorRole||''):'',roleLabel(r.byRole||r.actorRole||''),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL'])].map(row=>row.map(esc).join(','));
-  return new File([lines.join('\r\n')],`Inventro-TM-Daily-${day}.csv`,{type:'text/csv;charset=utf-8'});
+  const lines=[['Inventro Transaction Manager Daily Excel Report'],['Date',formatDateKey(day)],['Movement filter',movementFilter],['Department filter',departmentFilter],['Generated',formatDate(new Date())],[],['Item Name','Movement','Department','Quantity','Unit','Time','Person ID','Role','Requested By','Request ID','Note','Status'],...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit||'',formatDate(r.createdAt),r.byEmail?shortPersonId(r.byEmail,r.byRole||r.actorRole||''):'',roleLabel(r.byRole||r.actorRole||''),r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'):'',r.requestId||'',r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL'])].map(row=>row.map(esc).join(','));
+  return new File([lines.join('\r\n')],`Inventro-TM-Daily-${userDate(day)}.csv`,{type:'text/csv;charset=utf-8'});
 }
-async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareCsvFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${day}`); }
+async function shareTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); return shareCsvFile(file,`${membership?.companyName||'Company'} — Transaction Manager daily report ${userDate(day)}`); }
 function downloadTransactionManagerDailyCsv(day, rows, items, activity='all', department='all') { const file=buildTransactionManagerDailyCsvFile(day,rows,items,activity,department); const url=URL.createObjectURL(file); const a=document.createElement('a'); a.href=url; a.download=file.name; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); return 'downloaded'; }
 
 
@@ -3581,7 +3621,7 @@ function openCashEditModal(row, departments, onSave) {
       <div class="field"><label for="cash-edit-amount">Amount (₹)</label><input id="cash-edit-amount" type="number" min="0.01" step="0.01" value="${escapeHtml(String(row.amount||''))}"></div>
       <div class="field"><label for="cash-edit-department">Cash department</label><select id="cash-edit-department">${departments.map(d=>`<option value="${escapeHtml(d.name)}" ${d.name===row.department?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}</select></div>
       <div class="field"><label for="cash-edit-note">Note</label><input id="cash-edit-note" type="text" maxlength="160" value="${escapeHtml(row.note||'')}"></div>
-      <div class="cash-edit-locked-note">📅 Date is locked: <strong>${escapeHtml(row.dateKey||'')}</strong></div>
+      <div class="cash-edit-locked-note">📅 Date is locked: <strong>${escapeHtml(formatDateKey(row.dateKey||''))}</strong></div>
       <div id="cash-edit-message"></div>
     </div>
     <div class="inventory-edit-footer"><button type="button" class="btn btn-secondary" id="cash-edit-cancel">Cancel</button><button type="button" class="btn btn-primary" id="cash-edit-save">Save changes</button></div>
@@ -3712,12 +3752,12 @@ async function renderCashPage() {
 async function renderCashPageData(day,rows,opening){
   const today=localDateKey(), summary=cashSummary(rows,opening);
   const card=root.querySelector('#cash-balance-card');
-  if(card) card.innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(day)}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Closing balance</small></div><div class="cash-balance-status">${day===today?'LIVE':'LOCKED'}</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
+  if(card) card.innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(userDate(day))}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Closing balance</small></div><div class="cash-balance-status">${day===today?'LIVE':'LOCKED'}</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
   const list=root.querySelector('#cash-transaction-list');
   const subtitle=root.querySelector('#cash-list-subtitle');
   if(subtitle) subtitle.textContent=`${day===today?'Today':'Locked past day'} · ${rows.length} transaction${rows.length===1?'':'s'}`;
   if(list){
-    list.innerHTML=rows.length?rows.map(r=>cashTransactionRowHtml(r,{canEdit:isCashEditRole()})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(day)}.</strong><span>${day===today?'Record the first transaction above.':'This day has no recorded cash activity.'}</span></div>`;
+    list.innerHTML=rows.length?rows.map(r=>cashTransactionRowHtml(r,{canEdit:isCashEditRole()})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(userDate(day))}.</strong><span>${day===today?'Record the first transaction above.':'This day has no recorded cash activity.'}</span></div>`;
     list.querySelectorAll('[data-cash-edit]').forEach(btn=>btn.addEventListener('click',async()=>{
       const row=rows.find(r=>r.id===btn.dataset.cashEdit); if(!row)return;
       const isPast=row.dateKey!==today;
@@ -3750,7 +3790,7 @@ async function renderAdminCashHomeMonitor(){
     const summary=cashSummary(rows,opening);
     host.querySelector('#admin-home-cash-summary').innerHTML=`<div class="cash-home-summary"><div><span>Opening</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div class="closing"><span>Closing</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
     const list=host.querySelector('#admin-home-cash-list');
-    list.innerHTML=rows.length?rows.slice(0,8).map(r=>cashTransactionRowHtml(r,{canEdit:false})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(day)}.</strong><span>${day===today?'Waiting for today’s cash activity.':'No records found for this date.'}</span></div>`;
+    list.innerHTML=rows.length?rows.slice(0,8).map(r=>cashTransactionRowHtml(r,{canEdit:false})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No cash transactions for ${escapeHtml(userDate(day))}.</strong><span>${day===today?'Waiting for today’s cash activity.':'No records found for this date.'}</span></div>`;
   };
   dayInput.addEventListener('change',load);
   host.querySelector('#admin-home-cash-open').addEventListener('click',()=>navigate('cash-admin'));
@@ -3768,9 +3808,9 @@ function buildCashExcelFile(day, rows, typeFilter='all', department='all') {
     (typeFilter==='all' || String(r.type||'')===typeFilter) &&
     (department==='all' || String(r.department||'')===department)
   );
-  const body = selected.map(r => `<tr><td>${esc(r.dateKey||day)}</td><td>${esc(r.type==='outflow'?'Spent':'Received')}</td><td>${esc(cashAmountText(r))}</td><td>${esc(r.department||'')}</td><td>${esc(shortDisplayName(r.byEmail,r.byName))}</td><td>${esc(roleLabel(r.byRole||''))}</td><td>${esc(r.note||'')}</td><td>${esc(formatDate(r.createdAt))}</td><td>${r.editedAt?'EDITED':'ORIGINAL'}</td></tr>`).join('');
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:6px;text-align:left}th{font-weight:bold}.meta{margin-bottom:12px}</style></head><body><h2>Inventro Cash Transactions</h2><div class="meta"><b>Date:</b> ${esc(day)} &nbsp; <b>Transaction:</b> ${esc(typeLabel)} &nbsp; <b>Department:</b> ${esc(departmentLabel)}</div><table><thead><tr><th>Date</th><th>Transaction</th><th>Amount</th><th>Department</th><th>Person</th><th>Role</th><th>Note</th><th>Time</th><th>Status</th></tr></thead><tbody>${body}</tbody></table></body></html>`;
-  return {file:new File([html],`Inventro-Cash-${day}.xls`,{type:'application/vnd.ms-excel'}), count:selected.length};
+  const body = selected.map(r => `<tr><td>${esc(formatDateKey(r.dateKey||day))}</td><td>${esc(r.type==='outflow'?'Spent':'Received')}</td><td>${esc(cashAmountText(r))}</td><td>${esc(r.department||'')}</td><td>${esc(shortDisplayName(r.byEmail,r.byName))}</td><td>${esc(roleLabel(r.byRole||''))}</td><td>${esc(r.note||'')}</td><td>${esc(formatDate(r.createdAt))}</td><td>${r.editedAt?'EDITED':'ORIGINAL'}</td></tr>`).join('');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif}table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:6px;text-align:left}th{font-weight:bold}.meta{margin-bottom:12px}</style></head><body><h2>Inventro Cash Transactions</h2><div class="meta"><b>Date:</b> ${esc(userDate(day))} &nbsp; <b>Transaction:</b> ${esc(typeLabel)} &nbsp; <b>Department:</b> ${esc(departmentLabel)}</div><table><thead><tr><th>Date</th><th>Transaction</th><th>Amount</th><th>Department</th><th>Person</th><th>Role</th><th>Note</th><th>Time</th><th>Status</th></tr></thead><tbody>${body}</tbody></table></body></html>`;
+  return {file:new File([html],`Inventro-Cash-${userDate(day)}.xls`,{type:'application/vnd.ms-excel'}), count:selected.length};
 }
 function downloadCashExcel(day, rows, typeFilter='all', department='all') {
   const {file,count}=buildCashExcelFile(day,rows,typeFilter,department);
@@ -3796,7 +3836,7 @@ async function renderCashTransactionsPage({admin=false}={}) {
     const typeFilter=typeInput.value||'all', department=depInput.value||'all';
     const filtered=rows.filter(r=>(typeFilter==='all'||r.type===typeFilter)&&(department==='all'||r.department===department));
     const summary=cashSummary(filtered,opening);
-    root.querySelector('#cash-tx-balance').innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(day)}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Filtered closing balance</small></div><div class="cash-balance-status">${filtered.length} RECORDS</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
+    root.querySelector('#cash-tx-balance').innerHTML=`<div class="cash-balance-head"><div><span>${day===today?'Today':'Selected date'} · ${escapeHtml(userDate(day))}</span><strong>₹${summary.closing.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong><small>Filtered closing balance</small></div><div class="cash-balance-status">${filtered.length} RECORDS</div></div><div class="cash-balance-grid"><div><span>Opening balance</span><strong>₹${summary.opening.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Received</span><strong>+ ₹${summary.received.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div><div><span>Spent</span><strong>− ₹${summary.outflow.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2})}</strong></div></div>`;
     root.querySelector('#cash-tx-subtitle').textContent=`${filtered.length} transaction${filtered.length===1?'':'s'} · ${typeFilter==='received'?'Received only':typeFilter==='outflow'?'Spent only':'All transaction types'} · ${department==='all'?'All departments':department}`;
     root.querySelector('#cash-tx-list').innerHTML=filtered.length?filtered.map(r=>cashTransactionRowHtml(r,{canEdit:!admin&&isCashEditRole()})).join(''):`<div class="cash-empty-list"><div>💵</div><strong>No matching cash transactions.</strong><span>Try another date or filter.</span></div>`;
     // Keep filter changes stable: no vertical movement, scaling, or bounce.
@@ -4042,7 +4082,7 @@ async function shareCsvFile(file, text) {
 
 async function exportHistoryCsv(day, rows, selectedRole, activity='all', department='all'){
   const selected=Array.isArray(rows)?rows:[];
-  if(!selected.length) throw new Error(`No matching history was recorded on ${day}.`);
+  if(!selected.length) throw new Error(`No matching history was recorded on ${userDate(day)}.`);
   const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;
   const roleName=roleLabel(selectedRole);
   const activityName={
@@ -4053,7 +4093,7 @@ async function exportHistoryCsv(day, rows, selectedRole, activity='all', departm
   const lines=[
     ['Inventro History CSV'],
     ['Account',roleName],
-    ['Date',day],
+    ['Date',userDate(day)],
     ['Activity filter',activityName],
     ['Department filter',department==='all'?'All departments':department],
     ['Generated',formatDate(new Date())],
@@ -4068,11 +4108,11 @@ async function exportHistoryCsv(day, rows, selectedRole, activity='all', departm
     }
   });
   const safeRole=String(roleName).replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'').toLowerCase()||'history';
-  const file=new File([lines.map(row=>row.map(esc).join(',')).join('\r\n')],`Inventro-History-${safeRole}-${day}.csv`,{type:'text/csv;charset=utf-8'});
+  const file=new File([lines.map(row=>row.map(esc).join(',')).join('\r\n')],`Inventro-History-${safeRole}-${userDate(day)}.csv`,{type:'text/csv;charset=utf-8'});
   // One export control: on mobile, use the native share sheet so the CSV can
   // be sent directly to WhatsApp/etc.; on desktop, download the CSV normally.
   if(isMobileDevice() && navigator.share){
-    return shareCsvFile(file,`${membership?.companyName||'Company'} — ${roleName} history ${day}`);
+    return shareCsvFile(file,`${membership?.companyName||'Company'} — ${roleName} history ${userDate(day)}`);
   }
   return downloadCsvFile(file);
 }
@@ -4130,7 +4170,7 @@ async function shareLowStockPdf({yellowIds=[], resendIds=[]}={}){
     pdf.text(priority,xs[0],y);pdf.text(String(item.name).slice(0,32),xs[1],y);pdf.text(`${Number(item.quantity||0)} ${item.unit}`,xs[2],y);pdf.text(`${Number(item.lowStockAlert||0)} ${item.unit}`,xs[3],y);pdf.text(itemHasOutstandingOrder(item)?'Previously sent':'New order',xs[4],y);pdf.setDrawColor(238,241,245);pdf.line(16,y+2,194,y+2);y+=8;
   });
   y+=5;pdf.setFontSize(8);pdf.setTextColor(90,98,110);pdf.text('New items are automatically included only when they do not already have an outstanding supplier order.',16,y);y+=5;pdf.text('Items marked as previously sent were included again only when explicitly selected for resend.',16,y);
-  const blob=pdf.output('blob');const file=new File([blob],`Inventro-Supplier-Order-${now.toISOString().slice(0,10)}-${orderId.slice(-6)}.pdf`,{type:'application/pdf'});
+  const blob=pdf.output('blob');const file=new File([blob],`Inventro-Supplier-Order-${userDate(localDateKey(now))}-${orderId.slice(-6)}.pdf`,{type:'application/pdf'});
   const mode=await shareFile(file,`${company} — Supplier reorder ${orderId}`);
   // Only mark as ordered after the share/download succeeded. A cancelled share does not lock the item.
   const toMark=chosen.filter(i=>!itemHasOutstandingOrder(i));
@@ -4166,7 +4206,7 @@ async function shareCurrentStockCsv(itemsOverride=null){
   const items=Array.isArray(itemsOverride)?itemsOverride:await listItems(); const rows=currentStockRows(items); if(!rows.length) throw new Error('There are no stock items to share.');
   const escapeCsv=value=>`"${String(value??'').replaceAll('"','""')}"`;
   const lines=[['Item Name','Current Quantity','Unit','Low Stock Limit','Status','Last Updated'].map(escapeCsv).join(','),...rows.map(r=>[r.name,r.quantity,r.unit,r.low,stockState(r.quantity,r.low),r.updated].map(escapeCsv).join(','))];
-  const file=new File([lines.join('\r\n')],`Inventro-Current-Stock-${new Date().toISOString().slice(0,10)}.csv`,{type:'text/csv;charset=utf-8'});return shareCsvFile(file,`${membership?.companyName||'Company'} — Current Stock List`);
+  const file=new File([lines.join('\r\n')],`Inventro-Current-Stock-${userDate(localDateKey())}.csv`,{type:'text/csv;charset=utf-8'});return shareCsvFile(file,`${membership?.companyName||'Company'} — Current Stock List`);
 }
 
 async function shareDailyHistoryCsv(dateStr, rowsOverride=null){
@@ -4174,9 +4214,9 @@ async function shareDailyHistoryCsv(dateStr, rowsOverride=null){
   const rows=Array.isArray(rowsOverride)?rowsOverride:await listHistory(); const day=dateStr||localDateKey();
   const start=new Date(`${day}T00:00:00`),end=new Date(`${day}T23:59:59.999`);
   const selected=rows.filter(r=>{const ms=r.createdAt?.toMillis?.()||0;return ms>=start.getTime()&&ms<=end.getTime();}).sort((a,b)=>{const byItem=(a.itemName||'').localeCompare(b.itemName||'',undefined,{sensitivity:'base'});if(byItem)return byItem;return (a.createdAt?.toMillis?.()||0)-(b.createdAt?.toMillis?.()||0);});
-  if(!selected.length) throw new Error(`No stock history was recorded on ${day}.`);
+  if(!selected.length) throw new Error(`No stock history was recorded on ${userDate(day)}.`);
   const esc=v=>`"${String(v??'').replaceAll('"','""')}"`;const lines=[['Item Name','Movement','Department','Quantity','Unit','Person ID','Role','Time','Note','Status','Edited By ID','Edited At','Deleted By ID','Deleted At','Requested By ID'].map(esc).join(','),...selected.map(r=>[r.itemName,movementLabel(r.type),r.department||'',r.quantity,r.unit,r.byEmail?shortPersonId(r.byEmail,r.actorRole||r.byRole||''):'',roleLabel(r.actorRole||r.byRole||''),formatDate(r.createdAt),r.note||'',r.deleted?'DELETED':r.editedAt?'EDITED':'ORIGINAL',r.editedByEmail?shortPersonId(r.editedByEmail,r.editedByRole||r.actorRole||r.byRole||''):'',r.editedAt?formatDate(r.editedAt):'',r.deletedByEmail?shortPersonId(r.deletedByEmail,r.deletedByRole||r.actorRole||r.byRole||''): '',r.deletedAt?formatDate(r.deletedAt):'',r.requestedByEmail?shortPersonId(r.requestedByEmail,r.requestedByRole||'stock_requester'): ''].map(esc).join(','))];
-  const file=new File([lines.join('\r\n')],`Inventro-Daily-History-${day}.csv`,{type:'text/csv;charset=utf-8'});return shareCsvFile(file,`${membership?.companyName||'Company'} — Daily stock history ${day}`);
+  const file=new File([lines.join('\r\n')],`Inventro-Daily-History-${userDate(day)}.csv`,{type:'text/csv;charset=utf-8'});return shareCsvFile(file,`${membership?.companyName||'Company'} — Daily stock history ${userDate(day)}`);
 }
 
 async function renderStock(){
@@ -4545,7 +4585,7 @@ async function buildOrderListPdf(day, orderItems, preparedByName, preparedByEmai
   pdf.setTextColor(20,27,38);pdf.setFont('helvetica','bold');pdf.setFontSize(20);pdf.text('INVENTRO',16,18);
   pdf.setFontSize(14);pdf.text('Supplier Order List',16,27);
   pdf.setFont('helvetica','normal');pdf.setFontSize(9);
-  pdf.text(company,16,34);pdf.text(`Order date: ${day}`,16,39);
+  pdf.text(company,16,34);pdf.text(`Order date: ${userDate(day)}`,16,39);
   pdf.text(`Prepared by: ${preparedByName||preparedByEmail||'Transaction Manager'}`,16,44);
   pdf.text(`Generated: ${formatDate(now)}`,16,49);
   pdf.setDrawColor(220,226,234);pdf.line(16,53,194,53);
@@ -4567,7 +4607,7 @@ async function buildOrderListPdf(day, orderItems, preparedByName, preparedByEmai
   y+=6;pdf.setFontSize(8);pdf.setTextColor(90,98,110);
   pdf.text(`Total items: ${sorted.length}  •  Red: ${sorted.filter(x=>x.priority==='red').length}  •  Yellow: ${sorted.filter(x=>x.priority==='yellow').length}`,16,y);
   pdf.text('Red-zone items are mandatory. Yellow-zone items are optional selections.',16,y+5);
-  return new File([pdf.output('blob')],`Inventro-Order-List-${day}.pdf`,{type:'application/pdf'});
+  return new File([pdf.output('blob')],`Inventro-Order-List-${userDate(day)}.pdf`,{type:'application/pdf'});
 }
 
 async function generateAndShareDailyOrderList(day, orderItems) {
@@ -4579,7 +4619,7 @@ async function generateAndShareDailyOrderList(day, orderItems) {
   const saved=await saveDailyOrderList(day,orderItems,{lastGeneratedAt:serverTimestamp()});
   const file=await buildOrderListPdf(day,orderItems,user?.displayName||'',user?.email||'');
   const mode=isMobileDevice() && navigator.share
-    ? await shareFile(file,`${membership?.companyName||'Company'} — Supplier order list ${day}`)
+    ? await shareFile(file,`${membership?.companyName||'Company'} — Supplier order list ${userDate(day)}`)
     : downloadPdfFile(file);
   await recordOrderListVersion(day,orderItems,now.toISOString());
   return {mode,version:saved.version||1};
@@ -4603,7 +4643,7 @@ async function renderDailyOrderListBuilder(target, day, inventoryItems) {
   const selected=source.filter(x=>x.priority==='red'||x.quantity!==''||x.priority==='yellow');
   target.innerHTML=`
     <section class="tm-order-card">
-      <div class="tm-order-head"><div><div class="eyebrow">Procurement</div><h3>🛒 Supplier order list</h3><p>${escapeHtml(day)}</p></div><span class="tm-order-lock ${editable?'open':'locked'}">${editable?'OPEN':'🔒 LOCKED'}</span></div>
+      <div class="tm-order-head"><div><div class="eyebrow">Procurement</div><h3>🛒 Supplier order list</h3><p>${escapeHtml(userDate(day))}</p></div><span class="tm-order-lock ${editable?'open':'locked'}">${editable?'OPEN':'🔒 LOCKED'}</span></div>
       ${editable?`<div class="tm-order-add"><select id="tm-order-item"><option value="">Add another inventory item…</option>${inventoryItems.filter(i=>!existingById.has(String(i.id))).sort((a,b)=>String(a.name).localeCompare(String(b.name),undefined,{sensitivity:'base'})).map(i=>`<option value="${escapeHtml(i.id)}">${escapeHtml(i.name)} · ${escapeHtml(formatQuantityParts(i.quantity||0,i.unit||''))}</option>`).join('')}</select><button class="small-action" id="tm-order-add-btn" type="button">＋ Add item</button></div>`:''}
       <div class="tm-order-list" id="tm-order-list">${selected.length?selected.map(x=>`<div class="tm-order-row ${x.priority}-priority" data-order-row="${escapeHtml(x.itemId)}"><div class="tm-order-priority">${x.priority==='red'?'🔴':x.priority==='yellow'?'🟡':'⚪'}</div><div class="tm-order-name"><strong>${escapeHtml(x.itemName)}</strong><small>${x.priority==='red'?'Mandatory red zone':x.priority==='yellow'?'Optional yellow zone':'Manual selection'}</small></div><input class="tm-order-qty" type="number" min="0.01" step="0.01" value="${x.quantity===''?'':escapeHtml(x.quantity)}" ${x.priority==='red'?'required':''} ${editable?'':'disabled'} placeholder="Qty"><span class="tm-order-unit">${escapeHtml(x.unit)}</span>${editable&&x.priority!=='red'?`<button class="tm-order-remove" type="button" aria-label="Remove item">×</button>`:''}</div>`).join(''):`<div class="empty-team">No order items yet. Add an item above.</div>`}</div>
       ${editable?`<div class="tm-order-actions"><button class="small-action" id="tm-order-save" type="button">💾 Save list</button><button class="small-action report-btn" id="tm-order-pdf" type="button">📄 Generate PDF & Share</button></div>`:`<div class="tm-order-final"><strong>Final saved list</strong><span>${escapeHtml(saved?.preparedByName||saved?.preparedByEmail||'Transaction Manager')} · ${escapeHtml(formatDate(saved?.updatedAt||saved?.lastGeneratedAt))}</span>${isAdmin?'':''}</div>`}
@@ -4655,7 +4695,7 @@ async function renderTransactionManagerOrderHistory(target) {
     try{
       const saved=await getDailyOrderList(day);
       if(!saved){
-        result.innerHTML=`<div class="empty-team"><div class="empty-icon">🛒</div><strong>No supplier order for ${escapeHtml(day)}</strong><span>No Transaction Manager list was saved for this date.</span></div>`;
+        result.innerHTML=`<div class="empty-team"><div class="empty-icon">🛒</div><strong>No supplier order for ${escapeHtml(userDate(day))}</strong><span>No Transaction Manager list was saved for this date.</span></div>`;
         return;
       }
       const items=await listItems(true);
@@ -4859,7 +4899,7 @@ async function renderHistory(forcedRole=null){
         const before=rows.filter(r=>(movementActorRole(r)==='inventory_manager' || (isReceiveMovement(r) && movementActorRole(r)==='admin' && (r.isInitialReceipt===true || r.source==='admin_item_creation' || r.type==='opening'))) && (r.createdAt?.toMillis?.()||0) < new Date(`${day}T00:00:00`).getTime());
         const ids=[...new Set([...before,...dayRows].map(r=>r.itemId))];
         const statements=ids.map(id=>{const allBefore=before.filter(r=>r.itemId===id);const todayRows=dayRows.filter(r=>r.itemId===id);const initial=todayRows.filter(r=>isReceiveMovement(r)&&movementActorRole(r)==='admin'&&(r.isInitialReceipt===true||r.source==='admin_item_creation'||r.type==='opening'));const initialQty=initial.reduce((a,r)=>a+Number(r.quantity||0),0);const itemName=(todayRows[0]||allBefore[0])?.itemName||id;const unit=(todayRows[0]||allBefore[0])?.unit||'';let opening=0;for(const r of allBefore){opening+=movementSignedQuantity(r);}let received=0,dispatched=0;for(const r of todayRows){const n=Number(r.quantity||0);if(isReceiveMovement(r))received+=n;else if(effectiveMovementType(r)==='dispatch')dispatched+=n;}return {itemName,unit,opening,received,dispatched,closing:opening+received-dispatched};}).filter(x=>x.opening||x.received||x.dispatched);
-        statement.hidden=false; statement.innerHTML=`<div class="daily-statement-head"><div><strong>📘 Daily transaction statement</strong><span>${escapeHtml(day)} · Closing balance becomes the next day's opening balance.</span></div></div><div class="statement-grid">${statements.map(x=>`<div class="statement-row"><strong>${escapeHtml(x.itemName)}</strong><span>Opening <b>${x.opening} ${escapeHtml(x.unit)}</b></span><span>Received <b>+${x.received} ${escapeHtml(x.unit)}</b></span><span>Dispatched <b>−${x.dispatched} ${escapeHtml(x.unit)}</b></span><span>Closing <b>${x.closing} ${escapeHtml(x.unit)}</b></span></div>`).join('')||'<div class="empty-team">No transaction statement for this day.</div>'}</div>`;
+        statement.hidden=false; statement.innerHTML=`<div class="daily-statement-head"><div><strong>📘 Daily transaction statement</strong><span>${escapeHtml(userDate(day))} · Closing balance becomes the next day's opening balance.</span></div></div><div class="statement-grid">${statements.map(x=>`<div class="statement-row"><strong>${escapeHtml(x.itemName)}</strong><span>Opening <b>${x.opening} ${escapeHtml(x.unit)}</b></span><span>Received <b>+${x.received} ${escapeHtml(x.unit)}</b></span><span>Dispatched <b>−${x.dispatched} ${escapeHtml(x.unit)}</b></span><span>Closing <b>${x.closing} ${escapeHtml(x.unit)}</b></span></div>`).join('')||'<div class="empty-team">No transaction statement for this day.</div>'}</div>`;
       }else statement.hidden=true;
     }
     const shown=list.filter(r=>{
@@ -5160,7 +5200,7 @@ async function renderStats(){
   for(let i=1;i>=0;i--){
     const d=new Date(startOfToday.getTime()-i*dayMs);
     const key=dayKey(d);
-    twoDayLabels.push(i===0?'Today':d.toLocaleDateString(undefined,{weekday:'short',day:'numeric'}));
+    twoDayLabels.push(i===0?'Today':formatDateKey(localDateKey(d)));
     twoDayReceived.push(sumForDay(received,key));
     twoDayDispatched.push(sumForDay(dispatched,key));
   }
